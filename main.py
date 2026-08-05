@@ -6,7 +6,7 @@ from fastapi.responses import HTMLResponse, JSONResponse
 from sheet_manager import fetch_and_validate_user, DEFAULT_SHEET_URL
 from profile_manager import (
     get_all_profiles, add_or_update_profile, delete_profile,
-    get_profile_cookies, parse_cookies
+    get_profile_cookies, parse_cookies, export_profiles_b64
 )
 from activation_engine import activate_tv
 
@@ -210,6 +210,14 @@ HTML_CONTENT = """
                               class="w-full bg-zinc-900 border border-zinc-700 rounded-xl p-3 text-xs font-mono text-zinc-200 focus:outline-none"></textarea>
                     <button onclick="saveCookiesForProfile()" class="w-full bg-emerald-600 hover:bg-emerald-700 text-white font-bold py-2.5 rounded-xl text-xs">
                         Save Cookies
+                    </button>
+                </div>
+
+                <div class="bg-zinc-950 border border-zinc-800 p-4 rounded-xl space-y-2">
+                    <h4 class="text-xs font-bold text-zinc-300 uppercase">Server Restart Persistence Backup</h4>
+                    <p class="text-[11px] text-zinc-400">Copy this backup string and add it as an Environment Variable named <code class="text-amber-400 bg-zinc-900 px-1 rounded">PROFILES_JSON_DATA</code> in Render settings. That way, cookies will NEVER reset when Render restarts!</p>
+                    <button onclick="copyEnvBackup()" id="btnEnvBackup" class="w-full bg-blue-600 hover:bg-blue-700 text-white font-bold py-2.5 rounded-xl text-xs">
+                        📋 Copy Persistent ENV Backup String
                     </button>
                 </div>
 
@@ -464,6 +472,25 @@ HTML_CONTENT = """
             }
         }
 
+        async function copyEnvBackup() {
+            const res = await fetch('/api/admin/export-env', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ password: adminTokenPassword })
+            });
+            const data = await res.json();
+            if (data.b64_str) {
+                navigator.clipboard.writeText(data.b64_str);
+                const btn = document.getElementById('btnEnvBackup');
+                btn.innerText = "✓ Backup String Copied to Clipboard!";
+                btn.className = "w-full bg-emerald-600 text-white font-bold py-2.5 rounded-xl text-xs";
+                setTimeout(() => {
+                    btn.innerText = "📋 Copy Persistent ENV Backup String";
+                    btn.className = "w-full bg-blue-600 hover:bg-blue-700 text-white font-bold py-2.5 rounded-xl text-xs";
+                }, 3000);
+            }
+        }
+
         async function testSheetConnection() {
             const resBox = document.getElementById('sheetTestResult');
             resBox.classList.remove('hidden');
@@ -545,21 +572,28 @@ async def admin_update_cookies(data: dict = Body(...)):
     add_or_update_profile(email=email, cookies_raw=cookies_raw)
     return {"success": True}
 
+@app.post("/api/admin/export-env")
+async def admin_export_env(data: dict = Body(...)):
+    if data.get("password") != ADMIN_PASSWORD:
+        raise HTTPException(status_code=401, detail="Unauthorized")
+    b64_str = export_profiles_b64()
+    return {"b64_str": b64_str}
+
 @app.post("/api/admin/sheet-test")
 async def admin_sheet_test(data: dict = Body(...)):
     if data.get("password") != ADMIN_PASSWORD:
         raise HTTPException(status_code=401, detail="Unauthorized")
     
-    import requests, pandas as pd, io
+    import requests, csv, io
     sheet_url = DEFAULT_SHEET_URL
     try:
         r = requests.get(sheet_url, timeout=10)
-        df = pd.read_csv(io.StringIO(r.text))
+        reader = list(csv.DictReader(io.StringIO(r.text)))
         return {
             "status": "connected",
-            "columns": df.columns.tolist(),
-            "row_count": len(df),
-            "sample_first_row": df.iloc[0].to_dict() if not df.empty else {}
+            "columns": list(reader[0].keys()) if reader else [],
+            "row_count": len(reader),
+            "sample_first_row": reader[0] if reader else {}
         }
     except Exception as e:
         return {"status": "error", "message": str(e)}
