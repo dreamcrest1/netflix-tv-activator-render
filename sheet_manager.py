@@ -1,7 +1,7 @@
-import requests
-import pandas as pd
+import csv
 import io
 import re
+from datetime import datetime
 
 DEFAULT_SHEET_URL = "https://docs.google.com/spreadsheets/d/e/2PACX-1vS--Y2zpv344p1buBTni7_acc-Hu2_f0J1z_D3cf7bW4hy1bY3TNSyxj8BRC0sYMRZVMy3HoG7giQbO/pub?output=csv"
 
@@ -15,7 +15,19 @@ def get_csv_url(sheet_url: str) -> str:
         sheet_url = sheet_url.split("?")[0] + "?output=csv"
     return sheet_url
 
+def parse_date_flexible(date_str):
+    if not date_str:
+        return None
+    date_str = str(date_str).strip()
+    for fmt in ("%Y-%m-%d", "%d/%m/%Y", "%m/%d/%Y", "%d-%m-%Y", "%m-%d-%Y", "%Y/%m/%d", "%d %b %Y", "%d %B %Y"):
+        try:
+            return datetime.strptime(date_str, fmt)
+        except ValueError:
+            pass
+    return None
+
 def fetch_and_validate_user(mobile_number: str, custom_sheet_url: str = None):
+    import requests
     clean_mobile = re.sub(r'\D', '', str(mobile_number).strip())
     if len(clean_mobile) < 10:
         return {
@@ -38,23 +50,25 @@ def fetch_and_validate_user(mobile_number: str, custom_sheet_url: str = None):
                 "message": f"Unable to reach Google Sheet (HTTP {res.status_code})."
             }
         
-        df = pd.read_csv(io.StringIO(res.text))
-        if df.empty:
+        f = io.StringIO(res.text)
+        reader = list(csv.DictReader(f))
+        if not reader:
             return {
                 "valid": False,
                 "error_code": "EMPTY_SHEET",
                 "message": "Google Sheet contains no data."
             }
         
-        cols = {str(c).strip().lower(): c for c in df.columns}
+        fieldnames = reader[0].keys()
+        cols = {str(k).strip().lower(): k for k in fieldnames if k}
         
         mobile_col = None
         for key in ["mobile", "phone", "number", "contact", "mobile number", "phone number"]:
             if key in cols:
                 mobile_col = cols[key]
                 break
-        if not mobile_col:
-            mobile_col = df.columns[0]
+        if not mobile_col and fieldnames:
+            mobile_col = list(fieldnames)[0]
             
         expiry_col = None
         for key in ["expiry", "expiry date", "expire", "expiration", "expire date", "validity", "valid until"]:
@@ -69,8 +83,8 @@ def fetch_and_validate_user(mobile_number: str, custom_sheet_url: str = None):
                 break
 
         matched_row = None
-        for _, row in df.iterrows():
-            val = re.sub(r'\D', '', str(row[mobile_col]))
+        for row in reader:
+            val = re.sub(r'\D', '', str(row.get(mobile_col, '')))
             if len(val) >= 10 and val[-10:] == clean_mobile:
                 matched_row = row
                 break
@@ -82,7 +96,7 @@ def fetch_and_validate_user(mobile_number: str, custom_sheet_url: str = None):
                 "message": f"Mobile number '{clean_mobile}' is not registered in our records."
             }
 
-        expiry_str = str(matched_row[expiry_col]) if expiry_col else None
+        expiry_str = str(matched_row.get(expiry_col, '')).strip()
         if not expiry_str or expiry_str.lower() in ["nan", "none", "null"]:
             return {
                 "valid": False,
@@ -90,27 +104,24 @@ def fetch_and_validate_user(mobile_number: str, custom_sheet_url: str = None):
                 "message": "Expiry date missing for this subscription."
             }
 
-        try:
-            expiry_date = pd.to_datetime(expiry_str, dayfirst=True)
-            current_date = pd.Timestamp.now().floor('d')
-            
-            if current_date > expiry_date:
+        expiry_dt = parse_date_flexible(expiry_str)
+        if expiry_dt:
+            current_dt = datetime.now()
+            if current_dt > expiry_dt:
                 return {
                     "valid": False,
                     "error_code": "PLAN_EXPIRED",
-                    "message": f"Expired plan please renew (Expired on {expiry_date.strftime('%Y-%m-%d')}).",
-                    "expiry_date": expiry_date.strftime("%Y-%m-%d")
+                    "message": f"Expired plan please renew (Expired on {expiry_dt.strftime('%Y-%m-%d')}).",
+                    "expiry_date": expiry_dt.strftime("%Y-%m-%d")
                 }
-        except Exception:
-            pass
 
-        assigned_email = str(matched_row[email_col]).strip() if email_col else "Default Profile"
+        assigned_email = str(matched_row.get(email_col, '')).strip() if email_col else "Default Profile"
 
         return {
             "valid": True,
             "mobile": clean_mobile,
             "assigned_email": assigned_email,
-            "expiry_date": expiry_date.strftime("%Y-%m-%d") if 'expiry_date' in locals() else str(expiry_str),
+            "expiry_date": expiry_dt.strftime("%Y-%m-%d") if expiry_dt else expiry_str,
             "message": "User verified successfully."
         }
 
