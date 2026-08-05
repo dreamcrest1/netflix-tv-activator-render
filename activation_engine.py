@@ -1,7 +1,16 @@
 import re
 import asyncio
+import subprocess
+import sys
 from playwright.async_api import async_playwright
 from profile_manager import get_profile_cookies
+
+def ensure_chromium_installed():
+    try:
+        print("Downloading Playwright Chromium binary...")
+        subprocess.run([sys.executable, "-m", "playwright", "install", "chromium"], check=True)
+    except Exception as e:
+        print(f"Playwright install chromium output: {e}")
 
 async def activate_tv(email: str, raw_code: str):
     clean_code = re.sub(r'[^a-zA-Z0-9]', '', raw_code).upper()
@@ -23,20 +32,39 @@ async def activate_tv(email: str, raw_code: str):
     async with async_playwright() as p:
         browser = None
         try:
-            # Optimized Chromium parameters for Render micro-container limits
-            browser = await p.chromium.launch(
-                headless=True,
-                args=[
-                    "--no-sandbox",
-                    "--disable-setuid-sandbox",
-                    "--disable-blink-features=AutomationControlled",
-                    "--disable-dev-shm-usage",
-                    "--disable-gpu",
-                    "--no-first-run",
-                    "--no-zygote",
-                    "--single-process"
-                ]
-            )
+            try:
+                browser = await p.chromium.launch(
+                    headless=True,
+                    args=[
+                        "--no-sandbox",
+                        "--disable-setuid-sandbox",
+                        "--disable-blink-features=AutomationControlled",
+                        "--disable-dev-shm-usage",
+                        "--disable-gpu",
+                        "--no-first-run",
+                        "--no-zygote",
+                        "--single-process"
+                    ]
+                )
+            except Exception as launch_err:
+                if "Executable doesn't exist" in str(launch_err) or "playwright install" in str(launch_err):
+                    print("Chromium browser missing. Installing Chromium automatically...")
+                    ensure_chromium_installed()
+                    browser = await p.chromium.launch(
+                        headless=True,
+                        args=[
+                            "--no-sandbox",
+                            "--disable-setuid-sandbox",
+                            "--disable-blink-features=AutomationControlled",
+                            "--disable-dev-shm-usage",
+                            "--disable-gpu",
+                            "--no-first-run",
+                            "--no-zygote",
+                            "--single-process"
+                        ]
+                    )
+                else:
+                    raise launch_err
 
             context = await browser.new_context(
                 viewport={"width": 1280, "height": 800},
