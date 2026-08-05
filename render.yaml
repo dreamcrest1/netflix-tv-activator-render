@@ -1,0 +1,15 @@
+services:
+  - type: web
+    name: netflix-tv-activator
+    env: docker
+    plan: free
+    region: singapore
+    envVars:
+      - key: ADMIN_PASSWORD
+        value: Logical8794
+      - key: PORT
+        value: 10000
+    disk:
+      name: profiles-data
+      mountPath: /var/data
+      sizeGB: 1
