@@ -1,7 +1,7 @@
 import os
 import json
+import base64
 
-# Check Render persistent disk path (/var/data) if available, else local ./data directory
 DATA_DIR = "/var/data" if os.path.exists("/var/data") else os.path.join(os.path.dirname(os.path.abspath(__file__)), "data")
 PROFILES_FILE = os.path.join(DATA_DIR, "profiles.json")
 
@@ -13,8 +13,17 @@ def _ensure_storage():
             pass
     if not os.path.exists(PROFILES_FILE):
         try:
+            env_data = os.environ.get("PROFILES_JSON_DATA", "")
+            if env_data:
+                try:
+                    decoded = base64.b64decode(env_data).decode("utf-8")
+                    data = json.loads(decoded)
+                except Exception:
+                    data = json.loads(env_data)
+            else:
+                data = {}
             with open(PROFILES_FILE, "w", encoding="utf-8") as f:
-                json.dump({}, f)
+                json.dump(data, f, indent=2)
         except Exception:
             pass
 
@@ -23,9 +32,23 @@ def load_profiles():
     try:
         if os.path.exists(PROFILES_FILE):
             with open(PROFILES_FILE, "r", encoding="utf-8") as f:
-                return json.load(f)
+                content = f.read().strip()
+                if content:
+                    return json.loads(content)
     except Exception:
         pass
+    
+    # Fallback to ENV variable if file empty or unreadable
+    env_data = os.environ.get("PROFILES_JSON_DATA", "")
+    if env_data:
+        try:
+            try:
+                decoded = base64.b64decode(env_data).decode("utf-8")
+                return json.loads(decoded)
+            except Exception:
+                return json.loads(env_data)
+        except Exception:
+            pass
     return {}
 
 def save_profiles(data):
@@ -34,7 +57,7 @@ def save_profiles(data):
         with open(PROFILES_FILE, "w", encoding="utf-8") as f:
             json.dump(data, f, indent=2)
     except Exception as e:
-        print(f"Error saving profiles: {e}")
+        print(f"Error saving profiles to file: {e}")
 
 def get_all_profiles():
     data = load_profiles()
@@ -82,6 +105,11 @@ def get_profile_cookies(email: str):
     if email in data:
         return data[email].get("cookies", [])
     return []
+
+def export_profiles_b64():
+    data = load_profiles()
+    json_str = json.dumps(data)
+    return base64.b64encode(json_str.encode("utf-8")).decode("utf-8")
 
 def parse_cookies(raw_input):
     if isinstance(raw_input, list):
