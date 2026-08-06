@@ -1,70 +1,26 @@
 import re
 import asyncio
-import subprocess
-import sys
 from playwright.async_api import async_playwright
 from profile_manager import get_profile_cookies
 
-def ensure_chromium_installed():
-    try:
-        print("Downloading Playwright Chromium binary...")
-        subprocess.run([sys.executable, "-m", "playwright", "install", "chromium"], check=True)
-    except Exception as e:
-        print(f"Playwright install chromium output: {e}")
-
-async def activate_tv(email: str, raw_code: str):
-    clean_code = re.sub(r'[^a-zA-Z0-9]', '', raw_code).upper()
-    if len(clean_code) != 8:
-        return {
-            "success": False,
-            "error_code": "INVALID_CODE_FORMAT",
-            "message": f"TV Activation code must be exactly 8 characters. Received: {raw_code}"
-        }
-
-    cookies = get_profile_cookies(email)
-    if not cookies or len(cookies) == 0:
-        return {
-            "success": False,
-            "error_code": "NO_COOKIES_FOUND",
-            "message": f"No active Netflix cookies found for profile '{email}'. Please upload cookies in Admin Panel."
-        }
-
+async def run_activation_attempt(email: str, clean_code: str, cookies: list):
     async with async_playwright() as p:
         browser = None
         try:
-            try:
-                browser = await p.chromium.launch(
-                    headless=True,
-                    args=[
-                        "--no-sandbox",
-                        "--disable-setuid-sandbox",
-                        "--disable-blink-features=AutomationControlled",
-                        "--disable-dev-shm-usage",
-                        "--disable-gpu",
-                        "--no-first-run",
-                        "--no-zygote",
-                        "--single-process"
-                    ]
-                )
-            except Exception as launch_err:
-                if "Executable doesn't exist" in str(launch_err) or "playwright install" in str(launch_err):
-                    print("Chromium browser missing. Installing Chromium automatically...")
-                    ensure_chromium_installed()
-                    browser = await p.chromium.launch(
-                        headless=True,
-                        args=[
-                            "--no-sandbox",
-                            "--disable-setuid-sandbox",
-                            "--disable-blink-features=AutomationControlled",
-                            "--disable-dev-shm-usage",
-                            "--disable-gpu",
-                            "--no-first-run",
-                            "--no-zygote",
-                            "--single-process"
-                        ]
-                    )
-                else:
-                    raise launch_err
+            browser = await p.chromium.launch(
+                headless=True,
+                args=[
+                    "--no-sandbox",
+                    "--disable-setuid-sandbox",
+                    "--disable-blink-features=AutomationControlled",
+                    "--disable-dev-shm-usage",
+                    "--disable-gpu",
+                    "--no-first-run",
+                    "--no-zygote",
+                    "--single-process",
+                    "--disable-extensions"
+                ]
+            )
 
             context = await browser.new_context(
                 viewport={"width": 1280, "height": 800},
@@ -86,8 +42,12 @@ async def activate_tv(email: str, raw_code: str):
             await context.add_cookies(formatted_cookies)
             page = await context.new_page()
 
-            await page.goto("https://www.netflix.com/tv2", wait_until="domcontentloaded", timeout=35000)
-            await page.wait_for_timeout(2000)
+            try:
+                await page.goto("https://www.netflix.com/tv2", wait_until="domcontentloaded", timeout=25000)
+            except Exception:
+                await page.goto("https://www.netflix.com/tv2", wait_until="commit", timeout=25000)
+
+            await page.wait_for_timeout(1500)
 
             current_url = page.url
             if "login" in current_url or await page.locator("input[name='userLoginId']").count() > 0:
@@ -118,7 +78,7 @@ async def activate_tv(email: str, raw_code: str):
                     inp = inputs.nth(i)
                     await inp.focus()
                     await inp.fill("")
-                    await inp.type(clean_code[i], delay=100)
+                    await inp.type(clean_code[i], delay=80)
             else:
                 main_input = inputs.first
                 await main_input.focus()
@@ -127,9 +87,9 @@ async def activate_tv(email: str, raw_code: str):
                 except Exception:
                     pass
                 for char in clean_code:
-                    await page.keyboard.type(char, delay=120)
+                    await page.keyboard.type(char, delay=100)
 
-            await page.wait_for_timeout(1000)
+            await page.wait_for_timeout(800)
 
             submit_btn = page.locator("button[type='submit'], button[data-uia*='submit'], button[data-uia*='continue'], button[data-uia*='activate']")
             if await submit_btn.count() > 0 and await submit_btn.first.is_visible():
@@ -137,7 +97,7 @@ async def activate_tv(email: str, raw_code: str):
             else:
                 await page.keyboard.press("Enter")
 
-            await page.wait_for_timeout(4000)
+            await page.wait_for_timeout(3500)
 
             page_content = (await page.content()).lower()
             error_keywords = ["invalid code", "code expired", "incorrect code", "try again", "unable to connect"]
@@ -160,28 +120,62 @@ async def activate_tv(email: str, raw_code: str):
                 }
 
             await browser.close()
-
-            formatted_output = (
-                "📺 *1. If TV asks for a code (household / travelling code issue)\n"
-                "*GO TO https://netflix-code-fetcher-5q.vercel.app/\n"
-                "SELECT YOUR EMAIL\n"
-                f"Email : {email}\n"
-                "CLICK FETCH AND UPDATE CODE"
-            )
-
-            return {
-                "success": True,
-                "email": email,
-                "code": clean_code,
-                "message": "netflix activated",
-                "formatted_output": formatted_output
-            }
+            return {"success": True, "message": "netflix activated"}
 
         except Exception as e:
             if browser:
-                await browser.close()
-            return {
-                "success": False,
-                "error_code": "EXECUTION_ERROR",
-                "message": f"Automation exception: {str(e)}"
-            }
+                try:
+                    await browser.close()
+                except Exception:
+                    pass
+            raise e
+
+async def activate_tv(email: str, raw_code: str, mobile: str = "", expiry_date: str = ""):
+    clean_code = re.sub(r'[^a-zA-Z0-9]', '', raw_code).upper()
+    if len(clean_code) != 8:
+        return {
+            "success": False,
+            "error_code": "INVALID_CODE_FORMAT",
+            "message": f"TV Activation code must be exactly 8 characters. Received: {raw_code}"
+        }
+
+    cookies = get_profile_cookies(email)
+    if not cookies or len(cookies) == 0:
+        return {
+            "success": False,
+            "error_code": "NO_COOKIES_FOUND",
+            "message": f"No active Netflix cookies found for profile '{email}'. Please upload cookies in Admin Panel."
+        }
+
+    last_error = None
+    for attempt in range(1, 3):
+        try:
+            res = await run_activation_attempt(email=email, clean_code=clean_code, cookies=cookies)
+            if res.get("success") or res.get("error_code") in ["NOT_LOGGED_IN", "INVALID_CODE_FORMAT", "ACTIVATION_FAILED"]:
+                if res.get("success"):
+                    user_mobile_str = str(mobile).strip() if mobile else "N/A"
+                    expiry_str = str(expiry_date).strip() if expiry_date else "Active"
+                    
+                    formatted_output = (
+                        f"User: {user_mobile_str} Expiry Date: {expiry_str}\n\n\n"
+                        "📺 *1. If TV asks for a code (household / travelling code issue)\n\n"
+                        "*GO TO https://netflix-code-fetcher-5q.vercel.app/\n"
+                        "SELECT YOUR EMAIL\n"
+                        f"Email : {email}\n"
+                        "CLICK FETCH AND UPDATE CODE"
+                    )
+                    res["formatted_output"] = formatted_output
+                    res["email"] = email
+                    res["code"] = clean_code
+                return res
+            last_error = res.get("message", "Unknown error")
+        except Exception as e:
+            last_error = str(e)
+            print(f"Attempt {attempt} failed with error: {e}. Retrying...")
+            await asyncio.sleep(1)
+
+    return {
+        "success": False,
+        "error_code": "EXECUTION_ERROR",
+        "message": f"Automation error after retries: {last_error}"
+    }
