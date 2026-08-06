@@ -1,26 +1,63 @@
+import os
+import sys
 import re
 import asyncio
+import subprocess
+
+# Force Playwright to store Chromium binaries inside the app folder on Render
+PW_BROWSERS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "pw-browsers")
+os.environ["PLAYWRIGHT_BROWSERS_PATH"] = PW_BROWSERS_DIR
+
 from playwright.async_api import async_playwright
 from profile_manager import get_profile_cookies
+
+def ensure_chromium_installed():
+    try:
+        print(f"Downloading Chromium browser binary into {PW_BROWSERS_DIR}...")
+        os.makedirs(PW_BROWSERS_DIR, exist_ok=True)
+        subprocess.run([sys.executable, "-m", "playwright", "install", "chromium"], check=True)
+    except Exception as e:
+        print(f"Error installing Chromium: {e}")
 
 async def run_activation_attempt(email: str, clean_code: str, cookies: list):
     async with async_playwright() as p:
         browser = None
         try:
-            browser = await p.chromium.launch(
-                headless=True,
-                args=[
-                    "--no-sandbox",
-                    "--disable-setuid-sandbox",
-                    "--disable-blink-features=AutomationControlled",
-                    "--disable-dev-shm-usage",
-                    "--disable-gpu",
-                    "--no-first-run",
-                    "--no-zygote",
-                    "--single-process",
-                    "--disable-extensions"
-                ]
-            )
+            try:
+                browser = await p.chromium.launch(
+                    headless=True,
+                    args=[
+                        "--no-sandbox",
+                        "--disable-setuid-sandbox",
+                        "--disable-blink-features=AutomationControlled",
+                        "--disable-dev-shm-usage",
+                        "--disable-gpu",
+                        "--no-first-run",
+                        "--no-zygote",
+                        "--single-process",
+                        "--disable-extensions"
+                    ]
+                )
+            except Exception as launch_err:
+                if "Executable doesn't exist" in str(launch_err) or "playwright install" in str(launch_err):
+                    print("Chromium browser executable missing. Auto-installing Chromium...")
+                    ensure_chromium_installed()
+                    browser = await p.chromium.launch(
+                        headless=True,
+                        args=[
+                            "--no-sandbox",
+                            "--disable-setuid-sandbox",
+                            "--disable-blink-features=AutomationControlled",
+                            "--disable-dev-shm-usage",
+                            "--disable-gpu",
+                            "--no-first-run",
+                            "--no-zygote",
+                            "--single-process",
+                            "--disable-extensions"
+                        ]
+                    )
+                else:
+                    raise launch_err
 
             context = await browser.new_context(
                 viewport={"width": 1280, "height": 800},
