@@ -2,10 +2,14 @@ import os
 import json
 import base64
 import time
+import requests
 from datetime import datetime
 
 DATA_DIR = "/var/data" if os.path.exists("/var/data") else os.path.join(os.path.dirname(os.path.abspath(__file__)), "data")
 APP_DATA_FILE = os.path.join(DATA_DIR, "app_data.json")
+
+UPSTASH_URL = os.environ.get("UPSTASH_REDIS_REST_URL", "").strip()
+UPSTASH_TOKEN = os.environ.get("UPSTASH_REDIS_REST_TOKEN", "").strip()
 
 DEFAULT_SETTINGS = {
     "max_monthly_activations": 3,
@@ -14,6 +18,52 @@ DEFAULT_SETTINGS = {
     "whatsapp_link": "https://wa.me/916357998730?text=Hi%2C%20I%20want%20to%20buy%20Netflix%204K%20UHD%20subscription",
     "custom_sheet_url": ""
 }
+
+def load_from_upstash():
+    if not UPSTASH_URL or not UPSTASH_TOKEN:
+        return None
+    try:
+        clean_url = UPSTASH_URL.rstrip('/')
+        url = f"{clean_url}/get/app_data"
+        headers = {"Authorization": f"Bearer {UPSTASH_TOKEN}"}
+        res = requests.get(url, headers=headers, timeout=6)
+        if res.status_code == 200:
+            val = res.json().get("result")
+            if val:
+                if isinstance(val, str):
+                    return json.loads(val)
+                elif isinstance(val, dict):
+                    return val
+    except Exception as e:
+        print(f"Error reading from Upstash: {e}")
+    return None
+
+def save_to_upstash(data):
+    if not UPSTASH_URL or not UPSTASH_TOKEN:
+        return False
+    try:
+        clean_url = UPSTASH_URL.rstrip('/')
+        url = f"{clean_url}/set/app_data"
+        headers = {"Authorization": f"Bearer {UPSTASH_TOKEN}"}
+        json_str = json.dumps(data)
+        res = requests.post(url, headers=headers, data=json_str, timeout=6)
+        return res.status_code == 200
+    except Exception as e:
+        print(f"Error saving to Upstash: {e}")
+        return False
+
+def get_env_backup_data():
+    env_data = os.environ.get("PROFILES_JSON_DATA") or os.environ.get("APP_STATE_B64", "")
+    if env_data:
+        try:
+            try:
+                decoded = base64.b64decode(env_data).decode("utf-8")
+                return json.loads(decoded)
+            except Exception:
+                return json.loads(env_data)
+        except Exception:
+            pass
+    return None
 
 def _ensure_storage():
     if not os.path.exists(DATA_DIR):
@@ -33,16 +83,15 @@ def _ensure_storage():
                 "unique_ips": []
             }
         }
-        env_data = os.environ.get("PROFILES_JSON_DATA") or os.environ.get("APP_STATE_B64", "")
-        if env_data:
-            try:
-                try:
-                    decoded = base64.b64decode(env_data).decode("utf-8")
-                    data = json.loads(decoded)
-                except Exception:
-                    data = json.loads(env_data)
-            except Exception:
-                pass
+        upstash_data = load_from_upstash()
+        if upstash_data:
+            data = upstash_data
+        else:
+            env_data = get_env_backup_data()
+            if env_data:
+                data = env_data
+                save_to_upstash(data)
+
         try:
             with open(APP_DATA_FILE, "w", encoding="utf-8") as f:
                 json.dump(data, f, indent=2)
@@ -51,6 +100,28 @@ def _ensure_storage():
 
 def load_app_data():
     _ensure_storage()
+    upstash_data = load_from_upstash()
+    
+    env_backup = get_env_backup_data()
+    if upstash_data:
+        if (not upstash_data.get("logs") or len(upstash_data.get("logs", [])) == 0) and env_backup and env_backup.get("logs"):
+            upstash_data["logs"] = env_backup.get("logs", [])
+            if not upstash_data.get("profiles") and env_backup.get("profiles"):
+                upstash_data["profiles"] = env_backup.get("profiles", {})
+            save_to_upstash(upstash_data)
+
+        if "settings" not in upstash_data:
+            upstash_data["settings"] = DEFAULT_SETTINGS
+        if "blocked_numbers" not in upstash_data:
+            upstash_data["blocked_numbers"] = []
+        if "logs" not in upstash_data:
+            upstash_data["logs"] = []
+        if "profiles" not in upstash_data:
+            upstash_data["profiles"] = {}
+        if "metrics" not in upstash_data:
+            upstash_data["metrics"] = {"pageviews": 0, "unique_ips": []}
+        return upstash_data
+
     try:
         if os.path.exists(APP_DATA_FILE):
             with open(APP_DATA_FILE, "r", encoding="utf-8") as f:
@@ -71,27 +142,18 @@ def load_app_data():
     except Exception:
         pass
 
-    env_data = os.environ.get("PROFILES_JSON_DATA") or os.environ.get("APP_STATE_B64", "")
-    if env_data:
-        try:
-            try:
-                decoded = base64.b64decode(env_data).decode("utf-8")
-                d = json.loads(decoded)
-            except Exception:
-                d = json.loads(env_data)
-            if "settings" not in d:
-                d["settings"] = DEFAULT_SETTINGS
-            if "blocked_numbers" not in d:
-                d["blocked_numbers"] = []
-            if "logs" not in d:
-                d["logs"] = []
-            if "profiles" not in d:
-                d["profiles"] = {}
-            if "metrics" not in d:
-                d["metrics"] = {"pageviews": 0, "unique_ips": []}
-            return d
-        except Exception:
-            pass
+    if env_backup:
+        if "settings" not in env_backup:
+            env_backup["settings"] = DEFAULT_SETTINGS
+        if "blocked_numbers" not in env_backup:
+            env_backup["blocked_numbers"] = []
+        if "logs" not in env_backup:
+            env_backup["logs"] = []
+        if "profiles" not in env_backup:
+            env_backup["profiles"] = {}
+        if "metrics" not in env_backup:
+            env_backup["metrics"] = {"pageviews": 0, "unique_ips": []}
+        return env_backup
 
     return {
         "profiles": {},
@@ -107,7 +169,9 @@ def save_app_data(data):
         with open(APP_DATA_FILE, "w", encoding="utf-8") as f:
             json.dump(data, f, indent=2)
     except Exception as e:
-        print(f"Error saving app data: {e}")
+        print(f"Error saving app data to file: {e}")
+
+    save_to_upstash(data)
 
 def record_pageview(client_ip: str = "127.0.0.1"):
     data = load_app_data()
@@ -215,7 +279,7 @@ def update_settings(new_settings: dict):
     save_app_data(data)
     return data["settings"]
 
-def log_activation(mobile: str, email: str, code: str, success: bool, message: str):
+def log_activation(mobile: str, email: str, code: str, success: bool, message: str, action: str = "ACTIVATE"):
     data = load_app_data()
     if "logs" not in data:
         data["logs"] = []
@@ -231,11 +295,12 @@ def log_activation(mobile: str, email: str, code: str, success: bool, message: s
         "mobile": clean_mobile,
         "email": str(email).strip().lower(),
         "code": str(code).strip(),
+        "action": action,
         "success": bool(success),
         "message": str(message)
     }
     data["logs"].insert(0, entry)
-    data["logs"] = data["logs"][:1000]
+    data["logs"] = data["logs"][:2000]
     save_app_data(data)
     return entry
 
@@ -258,8 +323,8 @@ def check_activation_limit(mobile: str):
 
     current_month = time.strftime("%Y-%m")
 
-    monthly_count = sum(1 for l in logs if l.get("mobile") == clean_mobile and l.get("month_key") == current_month and l.get("success"))
-    total_count = sum(1 for l in logs if l.get("mobile") == clean_mobile and l.get("success"))
+    monthly_count = sum(1 for l in logs if l.get("mobile") == clean_mobile and l.get("month_key") == current_month and l.get("success") and l.get("action") == "ACTIVATE")
+    total_count = sum(1 for l in logs if l.get("mobile") == clean_mobile and l.get("success") and l.get("action") == "ACTIVATE")
 
     if max_monthly > 0 and monthly_count >= max_monthly:
         return False, f"Monthly activation limit reached ({monthly_count}/{max_monthly} used this month). Please contact support to upgrade."
@@ -276,14 +341,16 @@ def get_activation_stats():
     blocked = data.get("blocked_numbers", [])
     metrics = data.get("metrics", {"pageviews": 0, "unique_ips": []})
 
-    total_activations = len(logs)
-    successful_activations = sum(1 for l in logs if l.get("success"))
+    total_activations = sum(1 for l in logs if l.get("action") == "ACTIVATE")
+    successful_activations = sum(1 for l in logs if l.get("success") and l.get("action") == "ACTIVATE")
     
     user_stats = {}
     current_month = time.strftime("%Y-%m")
 
     for l in logs:
         m = l.get("mobile", "Unknown")
+        if not m or m == "Unknown":
+            continue
         if m not in user_stats:
             user_stats[m] = {
                 "mobile": m,
@@ -292,9 +359,10 @@ def get_activation_stats():
                 "last_active": l.get("timestamp"),
                 "is_blocked": m in blocked
             }
-        user_stats[m]["total"] += 1
-        if l.get("month_key") == current_month:
-            user_stats[m]["monthly"] += 1
+        if l.get("action") == "ACTIVATE" and l.get("success"):
+            user_stats[m]["total"] += 1
+            if l.get("month_key") == current_month:
+                user_stats[m]["monthly"] += 1
 
     for b in blocked:
         if b not in user_stats:
@@ -315,7 +383,7 @@ def get_activation_stats():
         "blocked_count": len(blocked),
         "settings": settings,
         "user_stats": sorted(list(user_stats.values()), key=lambda x: x["total"], reverse=True),
-        "recent_logs": logs[:200]
+        "recent_logs": logs[:500]
     }
 
 def export_full_state_b64():
