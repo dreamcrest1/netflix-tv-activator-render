@@ -19,11 +19,26 @@ def parse_date_flexible(date_str):
     if not date_str:
         return None
     date_str = str(date_str).strip()
-    for fmt in ("%Y-%m-%d", "%d/%m/%Y", "%m/%d/%Y", "%d-%m-%Y", "%m-%d-%Y", "%Y/%m/%d", "%d %b %Y", "%d %B %Y"):
+    
+    formats = (
+        "%Y-%m-%d", "%d/%m/%Y", "%m/%d/%Y", "%d-%m-%Y", "%m-%d-%Y", "%Y/%m/%d",
+        "%d %b %Y", "%d %B %Y", "%d-%b-%y", "%d-%b-%Y", "%d-%B-%y", "%d-%B-%Y",
+        "%d/%b/%y", "%d/%b/%Y", "%b %d, %Y", "%B %d, %Y", "%d/%m/%y", "%m/%d/%y"
+    )
+    for fmt in formats:
         try:
             return datetime.strptime(date_str, fmt)
         except ValueError:
             pass
+            
+    try:
+        import pandas as pd
+        dt = pd.to_datetime(date_str, dayfirst=True)
+        if not pd.isna(dt):
+            return dt.to_pydatetime()
+    except Exception:
+        pass
+
     return None
 
 def extract_email_from_row(row_dict):
@@ -120,8 +135,11 @@ def fetch_and_validate_user(mobile_number: str, custom_sheet_url: str = None):
 
         expiry_dt = parse_date_flexible(expiry_str)
         if expiry_dt:
+            # Set expiry to end of day (23:59:59)
+            expiry_end_of_day = expiry_dt.replace(hour=23, minute=59, second=59)
             current_dt = datetime.now()
-            if current_dt > expiry_dt:
+            
+            if current_dt > expiry_end_of_day:
                 return {
                     "valid": False,
                     "error_code": "PLAN_EXPIRED",
@@ -129,7 +147,6 @@ def fetch_and_validate_user(mobile_number: str, custom_sheet_url: str = None):
                     "expiry_date": expiry_dt.strftime("%Y-%m-%d")
                 }
 
-        # Intelligently extract assigned Netflix profile email
         assigned_email = extract_email_from_row(matched_row)
 
         return {
