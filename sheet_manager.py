@@ -42,15 +42,31 @@ def parse_date_flexible(date_str):
 
     return None
 
+def format_expiry_display(dt, raw_fallback=""):
+    if not dt:
+        return raw_fallback or "Active"
+    
+    day = dt.day
+    month_map = {
+        1: "Jan", 2: "Feb", 3: "Mar", 4: "Apr", 5: "May", 6: "Jun",
+        7: "Jul", 8: "Aug", 9: "Sept", 10: "Oct", 11: "Nov", 12: "Dec"
+    }
+    month_str = month_map.get(dt.month, dt.strftime("%b"))
+    year = dt.year
+    
+    return f"{day} {month_str} {year}"
+
 def extract_email_from_row(row_dict):
     email_pattern = r'[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}'
     
+    # 1. Search all row cell values for an email regex match
     for col, val in row_dict.items():
         val_str = str(val).strip()
         match = re.search(email_pattern, val_str)
         if match:
             return match.group(0).lower()
 
+    # 2. Inspect column headers
     cols = {str(k).strip().lower(): k for k in row_dict.keys() if k}
     for key in ["email", "profile", "profiles", "account", "netflix", "acc", "mail", "user"]:
         for c_lower, c_orig in cols.items():
@@ -140,6 +156,8 @@ def fetch_and_validate_user(mobile_number: str, custom_sheet_url: str = None):
                     break
 
         expiry_dt = parse_date_flexible(expiry_str)
+        formatted_display_expiry = format_expiry_display(expiry_dt, raw_fallback=expiry_str)
+
         if expiry_dt:
             expiry_end_of_day = expiry_dt.replace(hour=23, minute=59, second=59)
             current_dt = datetime.now()
@@ -148,8 +166,8 @@ def fetch_and_validate_user(mobile_number: str, custom_sheet_url: str = None):
                 return {
                     "valid": False,
                     "error_code": "PLAN_EXPIRED",
-                    "message": f"Expired plan please renew (Expired on {expiry_dt.strftime('%Y-%m-%d')}).",
-                    "expiry_date": expiry_dt.strftime("%Y-%m-%d")
+                    "message": f"Expired plan please renew (Expired on {formatted_display_expiry}).",
+                    "expiry_date": formatted_display_expiry
                 }
 
         assigned_email = extract_email_from_row(matched_row)
@@ -158,7 +176,7 @@ def fetch_and_validate_user(mobile_number: str, custom_sheet_url: str = None):
             "valid": True,
             "mobile": clean_mobile,
             "assigned_email": assigned_email,
-            "expiry_date": expiry_dt.strftime("%Y-%m-%d") if expiry_dt else (expiry_str or "Active"),
+            "expiry_date": formatted_display_expiry,
             "message": "User verified successfully."
         }
 
