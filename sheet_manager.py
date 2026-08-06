@@ -2,6 +2,7 @@ import csv
 import io
 import re
 from datetime import datetime
+from data_manager import is_number_blocked
 
 DEFAULT_SHEET_URL = "https://docs.google.com/spreadsheets/d/e/2PACX-1vS--Y2zpv344p1buBTni7_acc-Hu2_f0J1z_D3cf7bW4hy1bY3TNSyxj8BRC0sYMRZVMy3HoG7giQbO/pub?output=csv"
 
@@ -44,14 +45,12 @@ def parse_date_flexible(date_str):
 def extract_email_from_row(row_dict):
     email_pattern = r'[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}'
     
-    # 1. Search all row cell values for an email regex match
     for col, val in row_dict.items():
         val_str = str(val).strip()
         match = re.search(email_pattern, val_str)
         if match:
             return match.group(0).lower()
 
-    # 2. Inspect column headers
     cols = {str(k).strip().lower(): k for k in row_dict.keys() if k}
     for key in ["email", "profile", "profiles", "account", "netflix", "acc", "mail", "user"]:
         for c_lower, c_orig in cols.items():
@@ -74,6 +73,13 @@ def fetch_and_validate_user(mobile_number: str, custom_sheet_url: str = None):
     
     if len(clean_mobile) > 10:
         clean_mobile = clean_mobile[-10:]
+
+    if is_number_blocked(clean_mobile):
+        return {
+            "valid": False,
+            "error_code": "USER_BLOCKED",
+            "message": f"Mobile number '{clean_mobile}' has been suspended/blocked. Please contact support via WhatsApp."
+        }
 
     csv_url = get_csv_url(custom_sheet_url)
     
@@ -135,7 +141,6 @@ def fetch_and_validate_user(mobile_number: str, custom_sheet_url: str = None):
 
         expiry_dt = parse_date_flexible(expiry_str)
         if expiry_dt:
-            # Set expiry to end of day (23:59:59)
             expiry_end_of_day = expiry_dt.replace(hour=23, minute=59, second=59)
             current_dt = datetime.now()
             
