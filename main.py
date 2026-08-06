@@ -55,6 +55,7 @@ HTML_CONTENT = """
 </head>
 <body class="text-white min-h-screen flex flex-col justify-between p-3 md:p-6 relative pb-20">
 
+    <!-- TOP NAV HEADER -->
     <header class="max-w-4xl mx-auto w-full flex justify-between items-center glass-card rounded-2xl p-4 mb-5 shadow-2xl">
         <div class="flex items-center gap-3">
             <div class="bg-nred text-white font-extrabold text-2xl w-10 h-10 rounded-xl flex items-center justify-center shadow-lg shadow-red-900/50">
@@ -74,6 +75,7 @@ HTML_CONTENT = """
         </a>
     </header>
 
+    <!-- MAIN CONTENT CONTAINER -->
     <main class="max-w-4xl mx-auto w-full space-y-5">
 
         <!-- PROMO BANNER 1: BUY NETFLIX 4K UHD CTA -->
@@ -114,8 +116,10 @@ HTML_CONTENT = """
             </a>
         </div>
 
+        <!-- GLOBAL STATUS FEEDBACK -->
         <div id="globalStatus" class="hidden rounded-xl p-4 text-sm font-semibold flex items-center gap-3 border transition-all"></div>
 
+        <!-- STEP 1: VERIFY MOBILE SUBSCRIPTION -->
         <div class="glass-card rounded-2xl p-5 md:p-6 space-y-4 shadow-2xl">
             <div class="flex justify-between items-center border-b border-zinc-800/80 pb-3">
                 <h2 class="text-sm md:text-base font-bold text-white flex items-center gap-2">
@@ -153,6 +157,7 @@ HTML_CONTENT = """
             </div>
         </div>
 
+        <!-- STEP 2: ENTER 8-DIGIT TV CODE -->
         <div id="activationSection" class="glass-card rounded-2xl p-5 md:p-6 space-y-4 shadow-2xl opacity-50 pointer-events-none transition-all">
             <div class="flex justify-between items-center border-b border-zinc-800/80 pb-3">
                 <h2 class="text-sm md:text-base font-bold text-white flex items-center gap-2">
@@ -176,6 +181,7 @@ HTML_CONTENT = """
             </form>
         </div>
 
+        <!-- LIVE ACTIVITY CONSOLE -->
         <div class="glass-card rounded-2xl p-5 md:p-6 space-y-3 shadow-2xl">
             <div class="flex justify-between items-center">
                 <h3 class="text-xs font-bold uppercase text-zinc-400 flex items-center gap-2">
@@ -189,6 +195,7 @@ HTML_CONTENT = """
             </div>
         </div>
 
+        <!-- FORMATTED ACTIVATION OUTPUT RESULT -->
         <div id="outputContainer" class="hidden glass-card rounded-2xl p-5 md:p-6 space-y-3 shadow-2xl border-emerald-900/50">
             <div class="flex justify-between items-center">
                 <h3 class="text-xs font-bold uppercase text-emerald-400 flex items-center gap-2">
@@ -196,7 +203,7 @@ HTML_CONTENT = """
                     Formatted Activation Output
                 </h3>
             </div>
-            <textarea id="outputText" readonly rows="5" class="w-full bg-zinc-950 border border-zinc-800 rounded-xl p-3.5 text-xs text-zinc-200 font-mono focus:outline-none resize-none"></textarea>
+            <textarea id="outputText" readonly rows="8" class="w-full bg-zinc-950 border border-zinc-800 rounded-xl p-3.5 text-xs text-zinc-200 font-mono focus:outline-none resize-none"></textarea>
             <button onclick="copyOutput()" id="btnCopy" class="w-full bg-blue-600 hover:bg-blue-700 text-white font-bold py-3 rounded-xl transition flex items-center justify-center gap-2 text-sm">
                 <i class="fa-solid fa-copy"></i>
                 <span>📋 Copy Output to Clipboard</span>
@@ -204,6 +211,7 @@ HTML_CONTENT = """
         </div>
     </main>
 
+    <!-- FLOATING WHATSAPP BUTTON -->
     <a href="https://wa.me/916357998730?text=Hi%2C%20I%20need%20help%20with%20Netflix%20TV%20Activation" target="_blank"
        class="fixed bottom-5 right-5 bg-emerald-500 hover:bg-emerald-600 text-white font-bold px-4 py-3 rounded-full shadow-2xl flex items-center gap-2.5 z-40 transition transform hover:scale-105 border border-emerald-300/30">
         <i class="fa-brands fa-whatsapp text-2xl"></i>
@@ -240,7 +248,7 @@ HTML_CONTENT = """
         }
 
         async function fetchWithTimeout(resource, options = {}) {
-            const { timeout = 40000 } = options;
+            const { timeout = 50000 } = options;
             const controller = new AbortController();
             const id = setTimeout(() => controller.abort(), timeout);
             try {
@@ -320,7 +328,7 @@ HTML_CONTENT = """
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ mobile: verifiedMobile, code }),
-                    timeout: 45000
+                    timeout: 50000
                 });
                 const data = await res.json();
 
@@ -335,7 +343,7 @@ HTML_CONTENT = """
                     logConsole(`Activation failed: ${data.message}`, 'ERROR');
                 }
             } catch (err) {
-                const errMsg = err.name === 'AbortError' ? 'Browser activation timed out. Please check if Chromium is installed on Render.' : 'Server error running browser activation.';
+                const errMsg = err.name === 'AbortError' ? 'Browser activation timed out. Please retry.' : 'Server error running browser activation.';
                 showGlobalStatus('error', errMsg);
                 logConsole(`Execution exception: ${errMsg}`, 'ERROR');
             } finally {
@@ -858,7 +866,9 @@ async def api_activate(data: dict = Body(...)):
         return validation
 
     assigned_email = validation.get("assigned_email")
-    res = await activate_tv(email=assigned_email, raw_code=code)
+    expiry_date = validation.get("expiry_date", "")
+
+    res = await activate_tv(email=assigned_email, raw_code=code, mobile=mobile, expiry_date=expiry_date)
     
     log_activation(
         mobile=mobile,
