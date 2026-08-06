@@ -26,7 +26,12 @@ def _ensure_storage():
         data = {
             "profiles": {},
             "settings": DEFAULT_SETTINGS,
-            "logs": []
+            "blocked_numbers": [],
+            "logs": [],
+            "metrics": {
+                "pageviews": 0,
+                "unique_ips": []
+            }
         }
         env_data = os.environ.get("PROFILES_JSON_DATA") or os.environ.get("APP_STATE_B64", "")
         if env_data:
@@ -54,10 +59,14 @@ def load_app_data():
                     d = json.loads(content)
                     if "settings" not in d:
                         d["settings"] = DEFAULT_SETTINGS
+                    if "blocked_numbers" not in d:
+                        d["blocked_numbers"] = []
                     if "logs" not in d:
                         d["logs"] = []
                     if "profiles" not in d:
                         d["profiles"] = {}
+                    if "metrics" not in d:
+                        d["metrics"] = {"pageviews": 0, "unique_ips": []}
                     return d
     except Exception:
         pass
@@ -72,15 +81,25 @@ def load_app_data():
                 d = json.loads(env_data)
             if "settings" not in d:
                 d["settings"] = DEFAULT_SETTINGS
+            if "blocked_numbers" not in d:
+                d["blocked_numbers"] = []
             if "logs" not in d:
                 d["logs"] = []
             if "profiles" not in d:
                 d["profiles"] = {}
+            if "metrics" not in d:
+                d["metrics"] = {"pageviews": 0, "unique_ips": []}
             return d
         except Exception:
             pass
 
-    return {"profiles": {}, "settings": DEFAULT_SETTINGS, "logs": []}
+    return {
+        "profiles": {},
+        "settings": DEFAULT_SETTINGS,
+        "blocked_numbers": [],
+        "logs": [],
+        "metrics": {"pageviews": 0, "unique_ips": []}
+    }
 
 def save_app_data(data):
     _ensure_storage()
@@ -89,6 +108,46 @@ def save_app_data(data):
             json.dump(data, f, indent=2)
     except Exception as e:
         print(f"Error saving app data: {e}")
+
+def record_pageview(client_ip: str = "127.0.0.1"):
+    data = load_app_data()
+    metrics = data.get("metrics", {"pageviews": 0, "unique_ips": []})
+    metrics["pageviews"] = metrics.get("pageviews", 0) + 1
+    
+    unique_ips = set(metrics.get("unique_ips", []))
+    if client_ip and client_ip not in unique_ips and len(unique_ips) < 5000:
+        unique_ips.add(client_ip)
+        metrics["unique_ips"] = list(unique_ips)
+
+    data["metrics"] = metrics
+    save_app_data(data)
+    return metrics
+
+def is_number_blocked(mobile: str):
+    clean = str(mobile).strip()
+    if len(clean) > 10:
+        clean = clean[-10:]
+    data = load_app_data()
+    blocked = data.get("blocked_numbers", [])
+    return clean in blocked
+
+def toggle_block_number(mobile: str, block: bool = True):
+    clean = str(mobile).strip()
+    if len(clean) > 10:
+        clean = clean[-10:]
+    data = load_app_data()
+    blocked = set(data.get("blocked_numbers", []))
+    if block:
+        blocked.add(clean)
+    else:
+        blocked.discard(clean)
+    data["blocked_numbers"] = list(blocked)
+    save_app_data(data)
+    return list(blocked)
+
+def get_blocked_numbers():
+    data = load_app_data()
+    return data.get("blocked_numbers", [])
 
 def get_all_profiles():
     data = load_app_data()
@@ -161,11 +220,15 @@ def log_activation(mobile: str, email: str, code: str, success: bool, message: s
     if "logs" not in data:
         data["logs"] = []
 
+    clean_mobile = str(mobile).strip()
+    if len(clean_mobile) > 10:
+        clean_mobile = clean_mobile[-10:]
+
     entry = {
         "id": len(data["logs"]) + 1,
         "timestamp": time.strftime("%Y-%m-%d %H:%M:%S"),
         "month_key": time.strftime("%Y-%m"),
-        "mobile": str(mobile).strip(),
+        "mobile": clean_mobile,
         "email": str(email).strip().lower(),
         "code": str(code).strip(),
         "success": bool(success),
@@ -177,6 +240,9 @@ def log_activation(mobile: str, email: str, code: str, success: bool, message: s
     return entry
 
 def check_activation_limit(mobile: str):
+    if is_number_blocked(mobile):
+        return False, "This mobile number has been suspended. Please contact support via WhatsApp."
+
     settings = get_settings()
     max_monthly = int(settings.get("max_monthly_activations", 3))
     max_total = int(settings.get("max_total_activations", 0))
@@ -187,13 +253,16 @@ def check_activation_limit(mobile: str):
     data = load_app_data()
     logs = data.get("logs", [])
     clean_mobile = str(mobile).strip()
+    if len(clean_mobile) > 10:
+        clean_mobile = clean_mobile[-10:]
+
     current_month = time.strftime("%Y-%m")
 
     monthly_count = sum(1 for l in logs if l.get("mobile") == clean_mobile and l.get("month_key") == current_month and l.get("success"))
     total_count = sum(1 for l in logs if l.get("mobile") == clean_mobile and l.get("success"))
 
     if max_monthly > 0 and monthly_count >= max_monthly:
-        return False, f"Monthly activation limit reached ({monthly_count}/{max_monthly} used this month). Please contact support to renew."
+        return False, f"Monthly activation limit reached ({monthly_count}/{max_monthly} used this month). Please contact support to upgrade."
 
     if max_total > 0 and total_count >= max_total:
         return False, f"Total activation limit reached ({total_count}/{max_total} used). Please contact support."
@@ -204,6 +273,8 @@ def get_activation_stats():
     data = load_app_data()
     logs = data.get("logs", [])
     settings = get_settings()
+    blocked = data.get("blocked_numbers", [])
+    metrics = data.get("metrics", {"pageviews": 0, "unique_ips": []})
 
     total_activations = len(logs)
     successful_activations = sum(1 for l in logs if l.get("success"))
@@ -214,18 +285,37 @@ def get_activation_stats():
     for l in logs:
         m = l.get("mobile", "Unknown")
         if m not in user_stats:
-            user_stats[m] = {"mobile": m, "total": 0, "monthly": 0, "last_active": l.get("timestamp")}
+            user_stats[m] = {
+                "mobile": m,
+                "total": 0,
+                "monthly": 0,
+                "last_active": l.get("timestamp"),
+                "is_blocked": m in blocked
+            }
         user_stats[m]["total"] += 1
         if l.get("month_key") == current_month:
             user_stats[m]["monthly"] += 1
 
+    for b in blocked:
+        if b not in user_stats:
+            user_stats[b] = {
+                "mobile": b,
+                "total": 0,
+                "monthly": 0,
+                "last_active": "N/A",
+                "is_blocked": True
+            }
+
     return {
+        "pageviews": metrics.get("pageviews", 0),
+        "unique_visitors": len(metrics.get("unique_ips", [])),
         "total_logs": total_activations,
         "successful_logs": successful_activations,
         "unique_users_count": len(user_stats),
+        "blocked_count": len(blocked),
         "settings": settings,
         "user_stats": sorted(list(user_stats.values()), key=lambda x: x["total"], reverse=True),
-        "recent_logs": logs[:100]
+        "recent_logs": logs[:200]
     }
 
 def export_full_state_b64():
