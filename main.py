@@ -10,7 +10,8 @@ from profile_manager import (
 )
 from data_manager import (
     get_settings, update_settings, log_activation,
-    check_activation_limit, get_activation_stats, export_full_state_b64
+    check_activation_limit, get_activation_stats, export_full_state_b64,
+    record_pageview, toggle_block_number, get_blocked_numbers
 )
 from activation_engine import activate_tv
 
@@ -67,10 +68,10 @@ HTML_CONTENT = """
                 <p class="text-xs text-zinc-400">Automatic TV Activation & Subscription Verification</p>
             </div>
         </div>
-        <button onclick="openAdminModal()" class="bg-zinc-800 hover:bg-zinc-700 text-zinc-300 hover:text-white px-3 py-2 rounded-xl text-xs md:text-sm font-semibold transition border border-zinc-700 flex items-center gap-2">
-            <i class="fa-solid fa-lock text-nred"></i>
-            <span>Admin Panel</span>
-        </button>
+        <a href="/admin" class="bg-zinc-800 hover:bg-zinc-700 text-zinc-300 hover:text-white px-3 py-2 rounded-xl text-xs md:text-sm font-semibold transition border border-zinc-700 flex items-center gap-2">
+            <i class="fa-solid fa-gauge-high text-nred"></i>
+            <span>Admin Portal</span>
+        </a>
     </header>
 
     <main class="max-w-4xl mx-auto w-full space-y-5">
@@ -113,10 +114,8 @@ HTML_CONTENT = """
             </a>
         </div>
 
-        <!-- GLOBAL STATUS FEEDBACK -->
         <div id="globalStatus" class="hidden rounded-xl p-4 text-sm font-semibold flex items-center gap-3 border transition-all"></div>
 
-        <!-- STEP 1: VERIFY MOBILE SUBSCRIPTION -->
         <div class="glass-card rounded-2xl p-5 md:p-6 space-y-4 shadow-2xl">
             <div class="flex justify-between items-center border-b border-zinc-800/80 pb-3">
                 <h2 class="text-sm md:text-base font-bold text-white flex items-center gap-2">
@@ -154,7 +153,6 @@ HTML_CONTENT = """
             </div>
         </div>
 
-        <!-- STEP 2: ENTER 8-DIGIT TV CODE -->
         <div id="activationSection" class="glass-card rounded-2xl p-5 md:p-6 space-y-4 shadow-2xl opacity-50 pointer-events-none transition-all">
             <div class="flex justify-between items-center border-b border-zinc-800/80 pb-3">
                 <h2 class="text-sm md:text-base font-bold text-white flex items-center gap-2">
@@ -178,7 +176,6 @@ HTML_CONTENT = """
             </form>
         </div>
 
-        <!-- LIVE ACTIVITY CONSOLE -->
         <div class="glass-card rounded-2xl p-5 md:p-6 space-y-3 shadow-2xl">
             <div class="flex justify-between items-center">
                 <h3 class="text-xs font-bold uppercase text-zinc-400 flex items-center gap-2">
@@ -192,7 +189,6 @@ HTML_CONTENT = """
             </div>
         </div>
 
-        <!-- FORMATTED ACTIVATION OUTPUT RESULT -->
         <div id="outputContainer" class="hidden glass-card rounded-2xl p-5 md:p-6 space-y-3 shadow-2xl border-emerald-900/50">
             <div class="flex justify-between items-center">
                 <h3 class="text-xs font-bold uppercase text-emerald-400 flex items-center gap-2">
@@ -208,178 +204,15 @@ HTML_CONTENT = """
         </div>
     </main>
 
-    <!-- FLOATING WHATSAPP BUTTON -->
     <a href="https://wa.me/916357998730?text=Hi%2C%20I%20need%20help%20with%20Netflix%20TV%20Activation" target="_blank"
        class="fixed bottom-5 right-5 bg-emerald-500 hover:bg-emerald-600 text-white font-bold px-4 py-3 rounded-full shadow-2xl flex items-center gap-2.5 z-40 transition transform hover:scale-105 border border-emerald-300/30">
         <i class="fa-brands fa-whatsapp text-2xl"></i>
         <span class="text-xs md:text-sm font-semibold">WhatsApp Support</span>
     </a>
 
-    <!-- ADMIN PANEL MODAL -->
-    <div id="adminModal" class="fixed inset-0 bg-black/85 backdrop-blur-md z-50 hidden flex items-center justify-center p-3 md:p-6">
-        <div class="glass-card rounded-2xl max-w-4xl w-full p-5 md:p-6 space-y-5 border-zinc-700 max-h-[92vh] overflow-y-auto">
-            <div class="flex justify-between items-center border-b border-zinc-800 pb-3">
-                <h3 class="text-lg font-bold text-white flex items-center gap-2">
-                    <i class="fa-solid fa-user-shield text-nred"></i>
-                    Admin Management Panel
-                </h3>
-                <button onclick="closeAdminModal()" class="text-zinc-400 hover:text-white text-xl">&times;</button>
-            </div>
-
-            <!-- LOGIN GATE -->
-            <div id="adminLoginForm" class="space-y-4 max-w-md mx-auto py-6">
-                <p class="text-xs text-zinc-400 text-center">Enter admin password to unlock management dashboard.</p>
-                <div>
-                    <input type="password" id="adminPassword" placeholder="Admin Password"
-                           class="w-full bg-zinc-950 border border-zinc-800 rounded-xl p-3 text-white focus:outline-none focus:border-nred text-sm">
-                </div>
-                <button onclick="loginAdmin()" class="w-full bg-nred hover:bg-nredhover text-white font-bold py-3 rounded-xl text-sm">
-                    Unlock Admin Dashboard
-                </button>
-            </div>
-
-            <!-- DASHBOARD CONTENT -->
-            <div id="adminDashboard" class="hidden space-y-6">
-
-                <!-- DASHBOARD STATS CARDS -->
-                <div class="grid grid-cols-1 md:grid-cols-3 gap-3">
-                    <div class="bg-zinc-950 border border-zinc-800 p-4 rounded-xl">
-                        <div class="text-xs font-semibold text-zinc-400 uppercase">Total Activations</div>
-                        <div id="statTotal" class="text-2xl font-bold font-mono text-white mt-1">0</div>
-                    </div>
-                    <div class="bg-zinc-950 border border-zinc-800 p-4 rounded-xl">
-                        <div class="text-xs font-semibold text-zinc-400 uppercase">Successful Activations</div>
-                        <div id="statSuccess" class="text-2xl font-bold font-mono text-emerald-400 mt-1">0</div>
-                    </div>
-                    <div class="bg-zinc-950 border border-zinc-800 p-4 rounded-xl">
-                        <div class="text-xs font-semibold text-zinc-400 uppercase">Unique Active Users</div>
-                        <div id="statUsers" class="text-2xl font-bold font-mono text-amber-400 mt-1">0</div>
-                    </div>
-                </div>
-
-                <!-- ACTIVATION LIMITS CONFIGURATION -->
-                <div class="bg-zinc-950 border border-zinc-800 p-4 rounded-xl space-y-3">
-                    <h4 class="text-xs font-bold text-amber-400 uppercase flex items-center gap-1.5">
-                        <i class="fa-solid fa-gauge-high"></i> User Activation Limits Configuration
-                    </h4>
-                    <div class="grid grid-cols-1 md:grid-cols-2 gap-3">
-                        <div>
-                            <label class="block text-[11px] text-zinc-400 mb-1">Max Monthly Activations per User (0 = Unlimited)</label>
-                            <input type="number" id="limitMonthly" min="0" value="3"
-                                   class="w-full bg-zinc-900 border border-zinc-700 rounded-xl px-3 py-2 text-xs text-white focus:outline-none">
-                        </div>
-                        <div>
-                            <label class="block text-[11px] text-zinc-400 mb-1">Max Lifetime Activations per User (0 = Unlimited)</label>
-                            <input type="number" id="limitTotal" min="0" value="0"
-                                   class="w-full bg-zinc-900 border border-zinc-700 rounded-xl px-3 py-2 text-xs text-white focus:outline-none">
-                        </div>
-                    </div>
-                    <button onclick="saveLimitsConfig()" class="bg-amber-500 hover:bg-amber-600 text-black font-bold px-4 py-2 rounded-xl text-xs">
-                        Save Limits Configuration
-                    </button>
-                </div>
-
-                <!-- ADD / UPDATE PROFILES & COOKIES -->
-                <div class="bg-zinc-950 border border-zinc-800 p-4 rounded-xl space-y-3">
-                    <h4 class="text-xs font-bold text-zinc-300 uppercase">Add / Update Profile Email</h4>
-                    <div class="flex gap-2">
-                        <input type="email" id="newProfileEmail" placeholder="user@netflix.com"
-                               class="flex-1 bg-zinc-900 border border-zinc-700 rounded-xl px-3 py-2 text-xs text-white focus:outline-none">
-                        <button onclick="addNewProfile()" class="bg-nred text-white font-bold px-4 py-2 rounded-xl text-xs hover:bg-nredhover">
-                            Add Profile
-                        </button>
-                    </div>
-                </div>
-
-                <!-- SAVED PROFILES & COOKIES TABLE -->
-                <div class="space-y-2">
-                    <div class="flex justify-between items-center">
-                        <h4 class="text-xs font-bold text-zinc-300 uppercase">Saved Profiles & Cookies</h4>
-                        <button onclick="loadAdminProfiles()" class="text-xs text-nred hover:underline">Refresh List</button>
-                    </div>
-                    <div id="profilesList" class="space-y-2 max-h-48 overflow-y-auto pr-1"></div>
-                </div>
-
-                <!-- COOKIE EDITOR BOX -->
-                <div id="cookieEditorBox" class="hidden bg-zinc-950 border border-zinc-800 p-4 rounded-xl space-y-3">
-                    <div class="flex justify-between items-center">
-                        <h4 class="text-xs font-bold text-zinc-300 uppercase">Edit Cookies for: <span id="targetEmailDisplay" class="text-nred"></span></h4>
-                        <button onclick="closeCookieEditor()" class="text-xs text-zinc-500 hover:text-white">Cancel</button>
-                    </div>
-                    <textarea id="cookiesJsonInput" rows="6" placeholder='Paste JSON cookies array or raw cookie string...'
-                              class="w-full bg-zinc-900 border border-zinc-700 rounded-xl p-3 text-xs font-mono text-zinc-200 focus:outline-none"></textarea>
-                    <button onclick="saveCookiesForProfile()" class="w-full bg-emerald-600 hover:bg-emerald-700 text-white font-bold py-2.5 rounded-xl text-xs">
-                        Save Cookies
-                    </button>
-                </div>
-
-                <!-- PER-USER ACTIVATION COUNTERS TABLE -->
-                <div class="bg-zinc-950 border border-zinc-800 p-4 rounded-xl space-y-3">
-                    <h4 class="text-xs font-bold text-zinc-300 uppercase flex items-center gap-1.5">
-                        <i class="fa-solid fa-users"></i> Per-User Activation Statistics
-                    </h4>
-                    <div class="max-h-48 overflow-y-auto">
-                        <table class="w-full text-left text-xs text-zinc-300 border-collapse">
-                            <thead>
-                                <tr class="border-b border-zinc-800 text-zinc-500">
-                                    <th class="py-2">Mobile Number</th>
-                                    <th class="py-2">Monthly Activations</th>
-                                    <th class="py-2">Total Activations</th>
-                                    <th class="py-2">Last Active</th>
-                                </tr>
-                            </thead>
-                            <tbody id="userStatsTbody">
-                                <tr><td colspan="4" class="py-2 text-zinc-500 italic">No user data yet.</td></tr>
-                            </tbody>
-                        </table>
-                    </div>
-                </div>
-
-                <!-- AUDIT TRAIL LOGS TABLE -->
-                <div class="bg-zinc-950 border border-zinc-800 p-4 rounded-xl space-y-3">
-                    <div class="flex justify-between items-center">
-                        <h4 class="text-xs font-bold text-zinc-300 uppercase flex items-center gap-1.5">
-                            <i class="fa-solid fa-list-check"></i> Recent Activation Audit Logs
-                        </h4>
-                        <input type="text" id="logSearchInput" onkeyup="filterAuditLogs()" placeholder="Search mobile or email..."
-                               class="bg-zinc-900 border border-zinc-700 rounded-lg px-2.5 py-1 text-[11px] text-white focus:outline-none w-48">
-                    </div>
-                    <div class="max-h-56 overflow-y-auto">
-                        <table class="w-full text-left text-xs text-zinc-300 border-collapse">
-                            <thead>
-                                <tr class="border-b border-zinc-800 text-zinc-500">
-                                    <th class="py-2">Timestamp</th>
-                                    <th class="py-2">Mobile</th>
-                                    <th class="py-2">Profile Email</th>
-                                    <th class="py-2">TV Code</th>
-                                    <th class="py-2">Status</th>
-                                </tr>
-                            </thead>
-                            <tbody id="auditLogsTbody">
-                                <tr><td colspan="5" class="py-2 text-zinc-500 italic">No logs recorded yet.</td></tr>
-                            </tbody>
-                        </table>
-                    </div>
-                </div>
-
-                <!-- PERSISTENCE BACKUP TOOL -->
-                <div class="bg-zinc-950 border border-zinc-800 p-4 rounded-xl space-y-2">
-                    <h4 class="text-xs font-bold text-zinc-300 uppercase">Server Restart Persistence Backup</h4>
-                    <p class="text-[11px] text-zinc-400">Copy this backup string and add it as an Environment Variable named <code class="text-amber-400 bg-zinc-900 px-1 rounded">PROFILES_JSON_DATA</code> in Render settings. That way, all settings, logs, and cookies will NEVER reset when Render restarts!</p>
-                    <button onclick="copyEnvBackup()" id="btnEnvBackup" class="w-full bg-blue-600 hover:bg-blue-700 text-white font-bold py-2.5 rounded-xl text-xs">
-                        📋 Copy Persistent ENV Backup String
-                    </button>
-                </div>
-            </div>
-        </div>
-    </div>
-
     <script>
         let verifiedMobile = null;
         let assignedEmail = null;
-        let adminTokenPassword = "";
-        let currentTargetProfile = "";
-        let rawLogsData = [];
 
         function logConsole(msg, level="INFO") {
             const time = new Date().toLocaleTimeString();
@@ -523,14 +356,223 @@ HTML_CONTENT = """
                 btn.className = 'w-full bg-blue-600 hover:bg-blue-700 text-white font-bold py-3 rounded-xl transition flex items-center justify-center gap-2 text-sm';
             }, 2000);
         }
+    </script>
+</body>
+</html>
+"""
 
-        function openAdminModal() {
-            document.getElementById('adminModal').classList.remove('hidden');
+ADMIN_HTML_CONTENT = """
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Netflix Activator PRO - Admin Control Center</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <script>
+        tailwind.config = {
+            theme: {
+                extend: {
+                    colors: {
+                        nred: '#E50914',
+                        nredhover: '#B20710',
+                        darkcard: '#141414',
+                        darkborder: '#252525',
+                        accentgreen: '#00C853',
+                    }
+                }
+            }
         }
+    </script>
+    <style>
+        body { font-family: 'Segoe UI', Roboto, sans-serif; background-color: #0A0A0A; }
+        .glass-card { background: #141414; border: 1px solid #252525; }
+        ::-webkit-scrollbar { width: 6px; }
+        ::-webkit-scrollbar-track { background: #0A0A0A; }
+        ::-webkit-scrollbar-thumb { background: #252525; border-radius: 4px; }
+    </style>
+</head>
+<body class="text-white min-h-screen p-4 md:p-8">
 
-        function closeAdminModal() {
-            document.getElementById('adminModal').classList.add('hidden');
-        }
+    <div class="max-w-6xl mx-auto space-y-6">
+
+        <div class="flex flex-col md:flex-row justify-between items-start md:items-center gap-4 glass-card p-5 rounded-2xl shadow-2xl">
+            <div class="flex items-center gap-3">
+                <div class="bg-nred text-white w-10 h-10 rounded-xl flex items-center justify-center font-black text-xl shadow-lg shadow-red-900/50">
+                    N
+                </div>
+                <div>
+                    <h1 class="text-xl font-extrabold flex items-center gap-2">
+                        ADMIN CONTROL CENTER
+                        <span class="text-xs bg-red-950 text-nred border border-red-900 px-2 py-0.5 rounded font-mono">PRO</span>
+                    </h1>
+                    <p class="text-xs text-zinc-400">Full System Metrics, User Blacklist, Cookies & Activation Logs</p>
+                </div>
+            </div>
+            <a href="/" class="bg-zinc-800 hover:bg-zinc-700 text-zinc-200 px-4 py-2 rounded-xl text-xs font-bold transition flex items-center gap-2">
+                <i class="fa-solid fa-arrow-left"></i> Back to Main Site
+            </a>
+        </div>
+
+        <div id="adminLoginForm" class="glass-card max-w-md mx-auto p-6 rounded-2xl space-y-4 shadow-2xl my-12">
+            <h2 class="text-base font-bold text-center text-white flex items-center justify-center gap-2">
+                <i class="fa-solid fa-lock text-nred"></i> Unlock Admin Portal
+            </h2>
+            <input type="password" id="adminPassword" placeholder="Enter Admin Password"
+                   class="w-full bg-zinc-950 border border-zinc-800 rounded-xl p-3 text-white focus:outline-none focus:border-nred text-sm">
+            <button onclick="loginAdmin()" class="w-full bg-nred hover:bg-nredhover text-white font-bold py-3 rounded-xl text-sm transition">
+                Unlock Admin Dashboard
+            </button>
+        </div>
+
+        <div id="adminDashboard" class="hidden space-y-6">
+
+            <div class="grid grid-cols-2 md:grid-cols-4 gap-3">
+                <div class="glass-card p-4 rounded-xl">
+                    <div class="text-[11px] font-bold text-zinc-400 uppercase">Website Pageviews</div>
+                    <div id="statPageviews" class="text-2xl font-bold font-mono text-blue-400 mt-1">0</div>
+                </div>
+                <div class="glass-card p-4 rounded-xl">
+                    <div class="text-[11px] font-bold text-zinc-400 uppercase">Unique Visitors</div>
+                    <div id="statVisitors" class="text-2xl font-bold font-mono text-purple-400 mt-1">0</div>
+                </div>
+                <div class="glass-card p-4 rounded-xl">
+                    <div class="text-[11px] font-bold text-zinc-400 uppercase">Successful Activations</div>
+                    <div id="statSuccess" class="text-2xl font-bold font-mono text-emerald-400 mt-1">0</div>
+                </div>
+                <div class="glass-card p-4 rounded-xl">
+                    <div class="text-[11px] font-bold text-zinc-400 uppercase">Blocked Numbers</div>
+                    <div id="statBlocked" class="text-2xl font-bold font-mono text-red-500 mt-1">0</div>
+                </div>
+            </div>
+
+            <div class="glass-card p-5 rounded-2xl space-y-3">
+                <h3 class="text-xs font-bold text-amber-400 uppercase flex items-center gap-2">
+                    <i class="fa-solid fa-gauge-high"></i> User Activation Limits Control
+                </h3>
+                <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                    <div>
+                        <label class="block text-xs text-zinc-400 mb-1">Max Monthly Activations per User (0 = Unlimited)</label>
+                        <input type="number" id="limitMonthly" min="0" value="3"
+                               class="w-full bg-zinc-950 border border-zinc-800 rounded-xl p-2.5 text-xs text-white focus:outline-none">
+                    </div>
+                    <div>
+                        <label class="block text-xs text-zinc-400 mb-1">Max Lifetime Activations per User (0 = Unlimited)</label>
+                        <input type="number" id="limitTotal" min="0" value="0"
+                               class="w-full bg-zinc-950 border border-zinc-800 rounded-xl p-2.5 text-xs text-white focus:outline-none">
+                    </div>
+                </div>
+                <button onclick="saveLimitsConfig()" class="bg-amber-500 hover:bg-amber-600 text-black font-bold px-4 py-2 rounded-xl text-xs transition">
+                    Save Limits Configuration
+                </button>
+            </div>
+
+            <div class="glass-card p-5 rounded-2xl space-y-3">
+                <h3 class="text-xs font-bold text-red-500 uppercase flex items-center gap-2">
+                    <i class="fa-solid fa-user-slash"></i> User Blacklist / Number Blocking Tool
+                </h3>
+                <div class="flex gap-2">
+                    <input type="tel" id="blockMobileInput" placeholder="Enter 10-digit mobile number to block" maxlength="10"
+                           class="flex-1 bg-zinc-950 border border-zinc-800 rounded-xl px-3 py-2 text-xs text-white focus:outline-none font-mono">
+                    <button onclick="blockMobileAction()" class="bg-red-600 hover:bg-red-700 text-white font-bold px-4 py-2 rounded-xl text-xs transition">
+                        Block Number
+                    </button>
+                </div>
+            </div>
+
+            <div class="glass-card p-5 rounded-2xl space-y-4">
+                <div class="flex justify-between items-center">
+                    <h3 class="text-xs font-bold text-zinc-300 uppercase">Netflix Profiles & Session Cookies</h3>
+                    <button onclick="loadAdminProfiles()" class="text-xs text-nred hover:underline">Refresh Profiles</button>
+                </div>
+                <div class="flex gap-2">
+                    <input type="email" id="newProfileEmail" placeholder="user@netflix.com"
+                           class="flex-1 bg-zinc-950 border border-zinc-800 rounded-xl px-3 py-2 text-xs text-white focus:outline-none font-mono">
+                    <button onclick="addNewProfile()" class="bg-nred hover:bg-nredhover text-white font-bold px-4 py-2 rounded-xl text-xs transition">
+                        Add Profile
+                    </button>
+                </div>
+                <div id="profilesList" class="space-y-2 max-h-48 overflow-y-auto pr-1"></div>
+            </div>
+
+            <div id="cookieEditorBox" class="hidden glass-card p-5 rounded-2xl space-y-3 border-blue-900/50">
+                <div class="flex justify-between items-center">
+                    <h4 class="text-xs font-bold text-zinc-300 uppercase">Edit Cookies for: <span id="targetEmailDisplay" class="text-nred"></span></h4>
+                    <button onclick="closeCookieEditor()" class="text-xs text-zinc-500 hover:text-white">Cancel</button>
+                </div>
+                <textarea id="cookiesJsonInput" rows="6" placeholder='Paste JSON cookies array or raw cookie string...'
+                          class="w-full bg-zinc-950 border border-zinc-800 rounded-xl p-3 text-xs font-mono text-zinc-200 focus:outline-none"></textarea>
+                <button onclick="saveCookiesForProfile()" class="w-full bg-emerald-600 hover:bg-emerald-700 text-white font-bold py-2.5 rounded-xl text-xs transition">
+                    Save Cookies
+                </button>
+            </div>
+
+            <div class="glass-card p-5 rounded-2xl space-y-3">
+                <h3 class="text-xs font-bold text-zinc-300 uppercase flex items-center gap-2">
+                    <i class="fa-solid fa-users"></i> Per-User Statistics & Management
+                </h3>
+                <div class="max-h-60 overflow-y-auto">
+                    <table class="w-full text-left text-xs text-zinc-300 border-collapse">
+                        <thead>
+                            <tr class="border-b border-zinc-800 text-zinc-500">
+                                <th class="py-2">Mobile Number</th>
+                                <th class="py-2">Monthly Activations</th>
+                                <th class="py-2">Total Activations</th>
+                                <th class="py-2">Status</th>
+                                <th class="py-2">Last Active</th>
+                                <th class="py-2">Action</th>
+                            </tr>
+                        </thead>
+                        <tbody id="userStatsTbody">
+                            <tr><td colspan="6" class="py-2 text-zinc-500 italic">No user data yet.</td></tr>
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+
+            <div class="glass-card p-5 rounded-2xl space-y-3">
+                <div class="flex justify-between items-center">
+                    <h3 class="text-xs font-bold text-zinc-300 uppercase flex items-center gap-2">
+                        <i class="fa-solid fa-list-check"></i> Audit Activation Trail Logs
+                    </h3>
+                    <input type="text" id="logSearchInput" onkeyup="filterAuditLogs()" placeholder="Search mobile or email..."
+                           class="bg-zinc-950 border border-zinc-800 rounded-lg px-2.5 py-1 text-[11px] text-white focus:outline-none w-48 font-mono">
+                </div>
+                <div class="max-h-64 overflow-y-auto">
+                    <table class="w-full text-left text-xs text-zinc-300 border-collapse">
+                        <thead>
+                            <tr class="border-b border-zinc-800 text-zinc-500">
+                                <th class="py-2">Timestamp</th>
+                                <th class="py-2">Mobile</th>
+                                <th class="py-2">Profile Email</th>
+                                <th class="py-2">TV Code</th>
+                                <th class="py-2">Status</th>
+                            </tr>
+                        </thead>
+                        <tbody id="auditLogsTbody">
+                            <tr><td colspan="5" class="py-2 text-zinc-500 italic">No logs recorded yet.</td></tr>
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+
+            <div class="glass-card p-5 rounded-2xl space-y-2 border-blue-900/40">
+                <h3 class="text-xs font-bold text-zinc-300 uppercase">Server Restart Persistence Backup</h3>
+                <p class="text-[11px] text-zinc-400">Copy this backup string and add it as an Environment Variable named <code class="text-amber-400 bg-zinc-950 px-1 py-0.5 rounded font-mono">PROFILES_JSON_DATA</code> in Render settings. That way, all settings, logs, blocked numbers, and cookies will NEVER reset when Render restarts!</p>
+                <button onclick="copyEnvBackup()" id="btnEnvBackup" class="w-full bg-blue-600 hover:bg-blue-700 text-white font-bold py-2.5 rounded-xl text-xs transition">
+                    📋 Copy Persistent ENV Backup String
+                </button>
+            </div>
+
+        </div>
+
+    </div>
+
+    <script>
+        let adminTokenPassword = "";
+        let currentTargetProfile = "";
+        let rawLogsData = [];
 
         async function loginAdmin() {
             const pwd = document.getElementById('adminPassword').value;
@@ -561,7 +603,7 @@ HTML_CONTENT = """
             if (data.profiles && data.profiles.length > 0) {
                 data.profiles.forEach(p => {
                     const div = document.createElement('div');
-                    div.className = 'flex justify-between items-center bg-zinc-900 p-3 rounded-xl border border-zinc-800 text-xs';
+                    div.className = 'flex justify-between items-center bg-zinc-950 p-3 rounded-xl border border-zinc-800 text-xs';
                     div.innerHTML = `
                         <div>
                             <span class="font-bold text-white font-mono">${p.email}</span>
@@ -584,9 +626,10 @@ HTML_CONTENT = """
             const data = await res.json();
 
             if (data) {
-                document.getElementById('statTotal').innerText = data.total_logs || 0;
+                document.getElementById('statPageviews').innerText = data.pageviews || 0;
+                document.getElementById('statVisitors').innerText = data.unique_visitors || 0;
                 document.getElementById('statSuccess').innerText = data.successful_logs || 0;
-                document.getElementById('statUsers').innerText = data.unique_users_count || 0;
+                document.getElementById('statBlocked').innerText = data.blocked_count || 0;
 
                 if (data.settings) {
                     document.getElementById('limitMonthly').value = data.settings.max_monthly_activations ?? 3;
@@ -603,12 +646,22 @@ HTML_CONTENT = """
                             <td class="py-2 font-mono font-bold text-white">${u.mobile}</td>
                             <td class="py-2 font-mono text-amber-400">${u.monthly}</td>
                             <td class="py-2 font-mono text-emerald-400">${u.total}</td>
+                            <td class="py-2 font-mono">
+                                <span class="px-2 py-0.5 rounded text-[10px] ${u.is_blocked ? 'bg-red-950 text-red-400 border border-red-800' : 'bg-emerald-950 text-emerald-400 border border-emerald-800'}">
+                                    ${u.is_blocked ? 'BLOCKED' : 'ACTIVE'}
+                                </span>
+                            </td>
                             <td class="py-2 font-mono text-zinc-400">${u.last_active}</td>
+                            <td class="py-2">
+                                <button onclick="toggleBlockUser('${u.mobile}', ${!u.is_blocked})" class="px-2 py-1 text-[10px] rounded font-bold ${u.is_blocked ? 'bg-emerald-700 hover:bg-emerald-600 text-white' : 'bg-red-900 hover:bg-red-800 text-white'}">
+                                    ${u.is_blocked ? 'Unblock' : 'Block'}
+                                </button>
+                            </td>
                         `;
                         userTbody.appendChild(tr);
                     });
                 } else {
-                    userTbody.innerHTML = `<tr><td colspan="4" class="py-2 text-zinc-500 italic">No user data yet.</td></tr>`;
+                    userTbody.innerHTML = `<tr><td colspan="6" class="py-2 text-zinc-500 italic">No user data yet.</td></tr>`;
                 }
 
                 rawLogsData = data.recent_logs || [];
@@ -649,6 +702,22 @@ HTML_CONTENT = """
             }
             const filtered = rawLogsData.filter(l => l.mobile.toLowerCase().includes(query) || l.email.toLowerCase().includes(query));
             renderAuditLogs(filtered);
+        }
+
+        async function toggleBlockUser(mobile, block) {
+            await fetch('/api/admin/block-number', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ password: adminTokenPassword, mobile, block })
+            });
+            loadAdminStats();
+        }
+
+        async function blockMobileAction() {
+            const mob = document.getElementById('blockMobileInput').value.trim();
+            if (!mob) return;
+            await toggleBlockUser(mob, true);
+            document.getElementById('blockMobileInput').value = '';
         }
 
         async function saveLimitsConfig() {
@@ -745,28 +814,20 @@ HTML_CONTENT = """
                 }, 3000);
             }
         }
-
-        async function testSheetConnection() {
-            const resBox = document.getElementById('sheetTestResult');
-            resBox.classList.remove('hidden');
-            resBox.innerText = "Connecting to Google Sheet...";
-            
-            const res = await fetch('/api/admin/sheet-test', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ password: adminTokenPassword })
-            });
-            const data = await res.json();
-            resBox.innerText = JSON.stringify(data, null, 2);
-        }
     </script>
 </body>
 </html>
 """
 
 @app.get("/", response_class=HTMLResponse)
-async def serve_home():
+async def serve_home(request: Request):
+    client_ip = request.client.host if request.client else "127.0.0.1"
+    record_pageview(client_ip)
     return HTML_CONTENT
+
+@app.get("/admin", response_class=HTMLResponse)
+async def serve_admin_page(request: Request):
+    return ADMIN_HTML_CONTENT
 
 @app.post("/api/check-user")
 async def api_check_user(data: dict = Body(...)):
@@ -775,7 +836,7 @@ async def api_check_user(data: dict = Body(...)):
     
     allowed, limit_msg = check_activation_limit(mobile)
     if not allowed:
-        return {"valid": False, "error_code": "LIMIT_EXCEEDED", "message": limit_msg}
+        return {"valid": False, "error_code": "LIMIT_OR_BLOCKED", "message": limit_msg}
 
     res = fetch_and_validate_user(mobile_number=mobile, custom_sheet_url=sheet_url)
     return res
@@ -789,7 +850,7 @@ async def api_activate(data: dict = Body(...)):
     allowed, limit_msg = check_activation_limit(mobile)
     if not allowed:
         log_activation(mobile=mobile, email="Unknown", code=code, success=False, message=limit_msg)
-        return {"success": False, "error_code": "LIMIT_EXCEEDED", "message": limit_msg}
+        return {"success": False, "error_code": "LIMIT_OR_BLOCKED", "message": limit_msg}
 
     validation = fetch_and_validate_user(mobile_number=mobile, custom_sheet_url=sheet_url)
     if not validation.get("valid"):
@@ -828,6 +889,15 @@ async def admin_get_stats(password: str):
     if password != ADMIN_PASSWORD:
         raise HTTPException(status_code=401, detail="Unauthorized")
     return get_activation_stats()
+
+@app.post("/api/admin/block-number")
+async def admin_block_number(data: dict = Body(...)):
+    if data.get("password") != ADMIN_PASSWORD:
+        raise HTTPException(status_code=401, detail="Unauthorized")
+    mobile = data.get("mobile", "")
+    block = data.get("block", True)
+    blocked_list = toggle_block_number(mobile, block)
+    return {"success": True, "blocked_numbers": blocked_list}
 
 @app.post("/api/admin/settings")
 async def admin_update_settings(data: dict = Body(...)):
