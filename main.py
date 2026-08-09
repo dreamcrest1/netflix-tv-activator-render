@@ -55,7 +55,6 @@ HTML_CONTENT = """
 </head>
 <body class="text-white min-h-screen flex flex-col justify-between p-3 md:p-6 relative pb-20">
 
-    <!-- TOP NAV HEADER -->
     <header class="max-w-4xl mx-auto w-full flex justify-between items-center glass-card rounded-2xl p-4 mb-5 shadow-2xl">
         <div class="flex items-center gap-3">
             <div class="bg-nred text-white font-extrabold text-2xl w-10 h-10 rounded-xl flex items-center justify-center shadow-lg shadow-red-900/50">
@@ -75,10 +74,8 @@ HTML_CONTENT = """
         </a>
     </header>
 
-    <!-- MAIN CONTENT CONTAINER -->
     <main class="max-w-4xl mx-auto w-full space-y-5">
 
-        <!-- PROMO BANNER 1: BUY NETFLIX 4K UHD CTA -->
         <div class="bg-gradient-to-r from-red-700 via-red-600 to-red-800 rounded-2xl p-4 md:p-5 shadow-2xl flex flex-col md:flex-row justify-between items-center gap-4 border border-red-500/40">
             <div class="flex items-center gap-3">
                 <div class="bg-black px-3 py-1.5 rounded-lg flex items-center justify-center shadow-md">
@@ -96,7 +93,6 @@ HTML_CONTENT = """
             </a>
         </div>
 
-        <!-- PROMO BANNER 2: NEED TRAVEL / HOUSEHOLD CODE? -->
         <div class="glass-card bg-gradient-to-r from-zinc-900 via-zinc-900 to-zinc-950 border border-zinc-800 rounded-2xl p-4 md:p-5 shadow-2xl flex flex-col md:flex-row justify-between items-center gap-4">
             <div class="flex items-center gap-3">
                 <div class="bg-zinc-800 border border-zinc-700 text-amber-400 w-10 h-10 rounded-xl flex items-center justify-center text-lg shadow-inner">
@@ -116,10 +112,8 @@ HTML_CONTENT = """
             </a>
         </div>
 
-        <!-- GLOBAL STATUS FEEDBACK -->
         <div id="globalStatus" class="hidden rounded-xl p-4 text-sm font-semibold flex items-center gap-3 border transition-all"></div>
 
-        <!-- STEP 1: VERIFY MOBILE SUBSCRIPTION -->
         <div class="glass-card rounded-2xl p-5 md:p-6 space-y-4 shadow-2xl">
             <div class="flex justify-between items-center border-b border-zinc-800/80 pb-3">
                 <h2 class="text-sm md:text-base font-bold text-white flex items-center gap-2">
@@ -157,7 +151,6 @@ HTML_CONTENT = """
             </div>
         </div>
 
-        <!-- STEP 2: ENTER 8-DIGIT TV CODE -->
         <div id="activationSection" class="glass-card rounded-2xl p-5 md:p-6 space-y-4 shadow-2xl opacity-50 pointer-events-none transition-all">
             <div class="flex justify-between items-center border-b border-zinc-800/80 pb-3">
                 <h2 class="text-sm md:text-base font-bold text-white flex items-center gap-2">
@@ -181,7 +174,6 @@ HTML_CONTENT = """
             </form>
         </div>
 
-        <!-- LIVE ACTIVITY CONSOLE -->
         <div class="glass-card rounded-2xl p-5 md:p-6 space-y-3 shadow-2xl">
             <div class="flex justify-between items-center">
                 <h3 class="text-xs font-bold uppercase text-zinc-400 flex items-center gap-2">
@@ -195,7 +187,6 @@ HTML_CONTENT = """
             </div>
         </div>
 
-        <!-- FORMATTED ACTIVATION OUTPUT RESULT -->
         <div id="outputContainer" class="hidden glass-card rounded-2xl p-5 md:p-6 space-y-3 shadow-2xl border-emerald-900/50">
             <div class="flex justify-between items-center">
                 <h3 class="text-xs font-bold uppercase text-emerald-400 flex items-center gap-2">
@@ -211,7 +202,6 @@ HTML_CONTENT = """
         </div>
     </main>
 
-    <!-- FLOATING WHATSAPP BUTTON -->
     <a href="https://wa.me/916357998730?text=Hi%2C%20I%20need%20help%20with%20Netflix%20TV%20Activation" target="_blank"
        class="fixed bottom-5 right-5 bg-emerald-500 hover:bg-emerald-600 text-white font-bold px-4 py-3 rounded-full shadow-2xl flex items-center gap-2.5 z-40 transition transform hover:scale-105 border border-emerald-300/30">
         <i class="fa-brands fa-whatsapp text-2xl"></i>
@@ -320,8 +310,8 @@ HTML_CONTENT = """
             }
 
             btn.disabled = true;
-            btn.innerHTML = `<i class="fa-solid fa-spinner fa-spin"></i> Connecting Playwright to Netflix...`;
-            logConsole(`Initiating TV activation for ${assignedEmail} with code ${code}...`);
+            btn.innerHTML = `<i class="fa-solid fa-spinner fa-spin"></i> Validating cookies & connecting to Netflix...`;
+            logConsole(`Validating cookies & initiating TV activation for ${assignedEmail} with code ${code}...`);
 
             try {
                 const res = await fetchWithTimeout('/api/activate', {
@@ -332,15 +322,18 @@ HTML_CONTENT = """
                 });
                 const data = await res.json();
 
+                if (data.formatted_output) {
+                    document.getElementById('outputContainer').classList.remove('hidden');
+                    document.getElementById('outputText').value = data.formatted_output;
+                }
+
                 if (data.success) {
                     showGlobalStatus('success', '🎉 Netflix TV Code Activated Successfully!');
                     logConsole(`Activation successful for ${assignedEmail}!`, 'SUCCESS');
-
-                    document.getElementById('outputContainer').classList.remove('hidden');
-                    document.getElementById('outputText').value = data.formatted_output;
                 } else {
-                    showGlobalStatus('error', data.message || 'Activation failed.');
-                    logConsole(`Activation failed: ${data.message}`, 'ERROR');
+                    const errText = data.message || 'Activation failed.';
+                    showGlobalStatus('error', errText);
+                    logConsole(`Activation failed: ${errText}`, 'ERROR');
                 }
             } catch (err) {
                 const errMsg = err.name === 'AbortError' ? 'Browser activation timed out. Please retry.' : 'Server error running browser activation.';
