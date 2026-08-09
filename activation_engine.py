@@ -4,7 +4,6 @@ import re
 import asyncio
 import subprocess
 
-# Force Playwright to store Chromium binaries inside the app folder on Render
 PW_BROWSERS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "pw-browsers")
 os.environ["PLAYWRIGHT_BROWSERS_PATH"] = PW_BROWSERS_DIR
 
@@ -79,30 +78,37 @@ async def run_activation_attempt(email: str, clean_code: str, cookies: list):
             await context.add_cookies(formatted_cookies)
             page = await context.new_page()
 
+            # 1. Navigate to tv2 page
             try:
                 await page.goto("https://www.netflix.com/tv2", wait_until="domcontentloaded", timeout=25000)
             except Exception:
                 await page.goto("https://www.netflix.com/tv2", wait_until="commit", timeout=25000)
 
-            await page.wait_for_timeout(1500)
+            await page.wait_for_timeout(2000)
 
             current_url = page.url
+            # Pre-check: If redirected to login page or login input exists -> Cookies Expired
             if "login" in current_url or await page.locator("input[name='userLoginId']").count() > 0:
                 await browser.close()
                 return {
                     "success": False,
-                    "error_code": "NOT_LOGGED_IN",
-                    "message": f"Account '{email}' session cookies expired. Admin needs to re-upload cookies in Admin Panel."
+                    "error_code": "COOKIES_EXPIRED",
+                    "message": "cookies expired please tell admin to update"
                 }
 
-            inputs = page.locator("input[type='text'], input[type='number'], input[type='tel'], input[data-uia*='code'], input[data-uia*='pin']")
-            input_count = await inputs.count()
+            # Target input field according to updated Netflix UI (name="rendezvousCode")
+            code_input = page.locator("input[name='rendezvousCode'], input[autocomplete='one-time-code'], input[data-hcw-form-control-element], input[type='text'], input[type='number']")
+            input_count = await code_input.count()
 
             if input_count == 0:
-                inputs = page.locator("input")
-                input_count = await inputs.count()
-
-            if input_count == 0:
+                if "login" in page.url or await page.locator("input[name='userLoginId']").count() > 0:
+                    await browser.close()
+                    return {
+                        "success": False,
+                        "error_code": "COOKIES_EXPIRED",
+                        "message": "cookies expired please tell admin to update"
+                    }
+                
                 await browser.close()
                 return {
                     "success": False,
@@ -110,25 +116,26 @@ async def run_activation_attempt(email: str, clean_code: str, cookies: list):
                     "message": "Could not locate code input fields on netflix.com/tv2."
                 }
 
+            # Fill code into updated input element
             if input_count >= 8:
                 for i in range(min(8, input_count)):
-                    inp = inputs.nth(i)
+                    inp = code_input.nth(i)
                     await inp.focus()
                     await inp.fill("")
                     await inp.type(clean_code[i], delay=80)
             else:
-                main_input = inputs.first
+                main_input = code_input.first
                 await main_input.focus()
                 try:
                     await main_input.fill("")
                 except Exception:
                     pass
-                for char in clean_code:
-                    await page.keyboard.type(char, delay=100)
+                await main_input.type(clean_code, delay=80)
 
             await page.wait_for_timeout(800)
 
-            submit_btn = page.locator("button[type='submit'], button[data-uia*='submit'], button[data-uia*='continue'], button[data-uia*='activate']")
+            # Updated submit button matching new Netflix UI (data-uia="continue-button")
+            submit_btn = page.locator("button[data-uia='continue-button'], button[type='submit'], button[data-uia*='submit'], button[data-uia*='continue']")
             if await submit_btn.count() > 0 and await submit_btn.first.is_visible():
                 await submit_btn.first.click()
             else:
@@ -137,11 +144,11 @@ async def run_activation_attempt(email: str, clean_code: str, cookies: list):
             await page.wait_for_timeout(3500)
 
             page_content = (await page.content()).lower()
-            error_keywords = ["invalid code", "code expired", "incorrect code", "try again", "unable to connect"]
+            error_keywords = ["incorrect", "invalid code", "code expired", "try again", "unable to connect", "something went wrong"]
             has_error = any(err in page_content for err in error_keywords)
 
             if has_error:
-                error_elem = page.locator("[data-uia*='error'], .ui-message-error, .ui-message-contents")
+                error_elem = page.locator("[data-uia*='error'], .ui-message-error, .ui-message-contents, [data-hcw-form-control-validation]")
                 err_msg = "Invalid or expired TV code. Please check your TV screen."
                 if await error_elem.count() > 0:
                     try:
@@ -173,22 +180,31 @@ async def activate_tv(email: str, raw_code: str, mobile: str = "", expiry_date: 
         return {
             "success": False,
             "error_code": "INVALID_CODE_FORMAT",
-            "message": f"TV Activation code must be exactly 8 characters. Received: {raw_code}"
+            "message": f"TV Activation code must be exactly 8 characters. Received: {raw_code}",
+            "formatted_output": "Invalid TV activation code format."
         }
 
     cookies = get_profile_cookies(email)
     if not cookies or len(cookies) == 0:
+        msg = "cookies expired please tell admin to update"
         return {
             "success": False,
-            "error_code": "NO_COOKIES_FOUND",
-            "message": f"No active Netflix cookies found for profile '{email}'. Please upload cookies in Admin Panel."
+            "error_code": "COOKIES_EXPIRED",
+            "message": msg,
+            "formatted_output": msg
         }
 
     last_error = None
     for attempt in range(1, 3):
         try:
             res = await run_activation_attempt(email=email, clean_code=clean_code, cookies=cookies)
-            if res.get("success") or res.get("error_code") in ["NOT_LOGGED_IN", "INVALID_CODE_FORMAT", "ACTIVATION_FAILED"]:
+            if res.get("error_code") == "COOKIES_EXPIRED":
+                msg = "cookies expired please tell admin to update"
+                res["message"] = msg
+                res["formatted_output"] = msg
+                return res
+
+            if res.get("success") or res.get("error_code") in ["INVALID_CODE_FORMAT", "ACTIVATION_FAILED"]:
                 if res.get("success"):
                     user_mobile_str = str(mobile).strip() if mobile else "N/A"
                     expiry_str = str(expiry_date).strip() if expiry_date else "Active"
@@ -204,6 +220,8 @@ async def activate_tv(email: str, raw_code: str, mobile: str = "", expiry_date: 
                     res["formatted_output"] = formatted_output
                     res["email"] = email
                     res["code"] = clean_code
+                else:
+                    res["formatted_output"] = res.get("message", "Activation failed.")
                 return res
             last_error = res.get("message", "Unknown error")
         except Exception as e:
@@ -211,8 +229,10 @@ async def activate_tv(email: str, raw_code: str, mobile: str = "", expiry_date: 
             print(f"Attempt {attempt} failed with error: {e}. Retrying...")
             await asyncio.sleep(1)
 
+    msg = f"Automation error: {last_error}"
     return {
         "success": False,
         "error_code": "EXECUTION_ERROR",
-        "message": f"Automation error after retries: {last_error}"
+        "message": msg,
+        "formatted_output": msg
     }
