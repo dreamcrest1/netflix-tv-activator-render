@@ -84,6 +84,16 @@ async def run_activation_attempt(email: str, clean_code: str, cookies: list):
             except Exception:
                 await page.goto("https://www.netflix.com/tv2", wait_until="commit", timeout=25000)
 
+            # Wait dynamically for the input elements to render (solves the 0 count issue)
+            try:
+                await page.wait_for_selector(
+                    "input[data-uia^='pin-number-'], input[name='rendezvousCode'], input[autocomplete='one-time-code']", 
+                    state="visible", 
+                    timeout=15000
+                )
+            except Exception:
+                pass # Proceed to let the existing checks handle the missing inputs gracefully
+
             await page.wait_for_timeout(2000)
 
             current_url = page.url
@@ -96,9 +106,14 @@ async def run_activation_attempt(email: str, clean_code: str, cookies: list):
                     "message": "cookies expired please tell admin to update"
                 }
 
-            # Target input field according to updated Netflix UI (name="rendezvousCode")
-            code_input = page.locator("input[name='rendezvousCode'], input[autocomplete='one-time-code'], input[data-hcw-form-control-element], input[type='text'], input[type='number']")
+            # Target input field according to updated Netflix UI
+            code_input = page.locator("input[data-uia^='pin-number-']")
             input_count = await code_input.count()
+
+            if input_count == 0:
+                # Fallback to general input locators
+                code_input = page.locator("input[name='rendezvousCode'], input[autocomplete='one-time-code'], input[data-hcw-form-control-element], input[type='text'], input[type='number']")
+                input_count = await code_input.count()
 
             if input_count == 0:
                 if "login" in page.url or await page.locator("input[name='userLoginId']").count() > 0:
@@ -117,7 +132,14 @@ async def run_activation_attempt(email: str, clean_code: str, cookies: list):
                 }
 
             # Fill code into updated input element
-            if input_count >= 8:
+            if await page.locator("input[data-uia^='pin-number-']").count() >= 8:
+                # Explicitly fill split boxes by their direct ID mappings
+                for i in range(8):
+                    inp = page.locator(f"input[data-uia='pin-number-{i}']")
+                    await inp.focus()
+                    await inp.fill("")
+                    await inp.type(clean_code[i], delay=80)
+            elif input_count >= 8:
                 for i in range(min(8, input_count)):
                     inp = code_input.nth(i)
                     await inp.focus()
