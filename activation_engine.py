@@ -84,10 +84,10 @@ async def run_activation_attempt(email: str, clean_code: str, cookies: list):
             except Exception:
                 await page.goto("https://www.netflix.com/tv2", wait_until="commit", timeout=25000)
 
-            # Wait for either the inputs or login redirect
+            # Wait for either code input or login field
             try:
                 await page.wait_for_selector(
-                    "input[data-uia^='pin-number-'], input[name='rendezvousCode'], input[autocomplete='one-time-code'], input[name='userLoginId']", 
+                    "input[name='rendezvousCode'], input[autocomplete='one-time-code'], input[name='userLoginId']", 
                     state="visible", 
                     timeout=15000
                 )
@@ -96,8 +96,8 @@ async def run_activation_attempt(email: str, clean_code: str, cookies: list):
 
             await page.wait_for_timeout(1500)
 
-            current_url = page.url
             # Pre-check: Expired session / Login redirect
+            current_url = page.url
             if "login" in current_url or await page.locator("input[name='userLoginId']").count() > 0:
                 await browser.close()
                 return {
@@ -106,51 +106,48 @@ async def run_activation_attempt(email: str, clean_code: str, cookies: list):
                     "message": "cookies expired please tell admin to update"
                 }
 
-            # 2. Identify input boxes
-            pin_inputs = page.locator("input[data-uia^='pin-number-']")
-            pin_count = await pin_inputs.count()
+            # 2. Locate exact input field from DOM
+            code_input = page.locator("input[name='rendezvousCode'], input[autocomplete='one-time-code'], input[data-hcw-form-control-element='true']").first
 
-            if pin_count >= 8:
-                # Modern Split-Box PIN UI: Focus 1st box and type naturally with keyboard
-                first_box = page.locator("input[data-uia='pin-number-0']")
-                await first_box.click()
-                await page.wait_for_timeout(200)
-                await page.keyboard.press("Control+A")
-                await page.keyboard.press("Backspace")
-                for char in clean_code:
-                    await page.keyboard.press(char)
-                    await page.wait_for_timeout(100)
-            else:
-                fallback_input = page.locator("input[name='rendezvousCode'], input[autocomplete='one-time-code'], input[data-hcw-form-control-element], input[type='text'], input[type='number']").first
-                if await fallback_input.count() == 0:
-                    await browser.close()
-                    return {
-                        "success": False,
-                        "error_code": "INPUT_NOT_FOUND",
-                        "message": "Could not locate code input fields on netflix.com/tv2."
-                    }
-                await fallback_input.click()
-                await page.keyboard.press("Control+A")
-                await page.keyboard.press("Backspace")
-                await fallback_input.type(clean_code, delay=100)
+            if await code_input.count() == 0:
+                await browser.close()
+                return {
+                    "success": False,
+                    "error_code": "INPUT_NOT_FOUND",
+                    "message": "Could not locate code input fields on netflix.com/tv2."
+                }
 
-            await page.wait_for_timeout(1000)
+            # 3. Fill code and trigger React synthetic events
+            await code_input.click()
+            await code_input.fill("")
+            await code_input.fill(clean_code)
+            
+            # Ensure React state recognizes the value change
+            await page.evaluate(f"""
+                () => {{
+                    const el = document.querySelector("input[name='rendezvousCode'], input[autocomplete='one-time-code']");
+                    if (el) {{
+                        el.value = '{clean_code}';
+                        el.dispatchEvent(new Event('input', {{ bubbles: true }}));
+                        el.dispatchEvent(new Event('change', {{ bubbles: true }}));
+                    }}
+                }}
+            """)
 
-            # 3. Submit code (if not auto-submitted by Netflix)
-            submit_btn = page.locator("button[data-uia='continue-button'], button[type='submit'], button[data-uia*='submit'], button[data-uia*='continue']")
-            if await submit_btn.count() > 0 and await submit_btn.first.is_visible():
-                try:
-                    await submit_btn.first.click(timeout=3000)
-                except Exception:
-                    await page.keyboard.press("Enter")
+            await page.wait_for_timeout(800)
+
+            # 4. Click Continue button
+            continue_btn = page.locator("button:has-text('Continue'), button:has-text('continue'), button[type='submit']").first
+            if await continue_btn.count() > 0 and await continue_btn.is_visible():
+                await continue_btn.click()
             else:
                 await page.keyboard.press("Enter")
 
-            # Allow time for Netflix server to respond
+            # 5. Wait and verify actual outcome
             await page.wait_for_timeout(4000)
 
-            # 4. Check for ACTUAL visible error elements
-            error_locators = page.locator("[data-uia*='error'], .ui-message-error, .ui-message-contents, [data-hcw-form-control-validation]")
+            # Check for error validation messages on screen
+            error_locators = page.locator("[data-hcw-form-control-validation], [data-uia*='error'], .ui-message-error, .ui-message-contents")
             error_count = await error_locators.count()
 
             if error_count > 0:
@@ -166,7 +163,18 @@ async def run_activation_attempt(email: str, clean_code: str, cookies: list):
                                 "message": err_text
                             }
 
-            # 5. Check if activation succeeded (URL change or presence of success message/absence of inputs)
+            # Check if input field is still present (meaning form submission failed or didn't proceed)
+            if await code_input.is_visible():
+                # Check again after a short delay in case of network latency
+                await page.wait_for_timeout(2500)
+                if await code_input.is_visible():
+                    await browser.close()
+                    return {
+                        "success": False,
+                        "error_code": "ACTIVATION_FAILED",
+                        "message": "Activation did not complete. Please verify the code on your TV."
+                    }
+
             await browser.close()
             return {"success": True, "message": "netflix activated"}
 
