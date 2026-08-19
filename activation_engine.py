@@ -78,26 +78,26 @@ async def run_activation_attempt(email: str, clean_code: str, cookies: list):
             await context.add_cookies(formatted_cookies)
             page = await context.new_page()
 
-            # 1. Navigate to tv2 page
+            # 1. Navigate to activation page
             try:
                 await page.goto("https://www.netflix.com/tv2", wait_until="domcontentloaded", timeout=25000)
             except Exception:
                 await page.goto("https://www.netflix.com/tv2", wait_until="commit", timeout=25000)
 
-            # Wait dynamically for the input elements to render (solves the 0 count issue)
+            # Wait for either the inputs or login redirect
             try:
                 await page.wait_for_selector(
-                    "input[data-uia^='pin-number-'], input[name='rendezvousCode'], input[autocomplete='one-time-code']", 
+                    "input[data-uia^='pin-number-'], input[name='rendezvousCode'], input[autocomplete='one-time-code'], input[name='userLoginId']", 
                     state="visible", 
                     timeout=15000
                 )
             except Exception:
-                pass # Proceed to let the existing checks handle the missing inputs gracefully
+                pass
 
-            await page.wait_for_timeout(2000)
+            await page.wait_for_timeout(1500)
 
             current_url = page.url
-            # Pre-check: If redirected to login page or login input exists -> Cookies Expired
+            # Pre-check: Expired session / Login redirect
             if "login" in current_url or await page.locator("input[name='userLoginId']").count() > 0:
                 await browser.close()
                 return {
@@ -106,85 +106,67 @@ async def run_activation_attempt(email: str, clean_code: str, cookies: list):
                     "message": "cookies expired please tell admin to update"
                 }
 
-            # Target input field according to updated Netflix UI
-            code_input = page.locator("input[data-uia^='pin-number-']")
-            input_count = await code_input.count()
+            # 2. Identify input boxes
+            pin_inputs = page.locator("input[data-uia^='pin-number-']")
+            pin_count = await pin_inputs.count()
 
-            if input_count == 0:
-                # Fallback to general input locators
-                code_input = page.locator("input[name='rendezvousCode'], input[autocomplete='one-time-code'], input[data-hcw-form-control-element], input[type='text'], input[type='number']")
-                input_count = await code_input.count()
-
-            if input_count == 0:
-                if "login" in page.url or await page.locator("input[name='userLoginId']").count() > 0:
+            if pin_count >= 8:
+                # Modern Split-Box PIN UI: Focus 1st box and type naturally with keyboard
+                first_box = page.locator("input[data-uia='pin-number-0']")
+                await first_box.click()
+                await page.wait_for_timeout(200)
+                await page.keyboard.press("Control+A")
+                await page.keyboard.press("Backspace")
+                for char in clean_code:
+                    await page.keyboard.press(char)
+                    await page.wait_for_timeout(100)
+            else:
+                fallback_input = page.locator("input[name='rendezvousCode'], input[autocomplete='one-time-code'], input[data-hcw-form-control-element], input[type='text'], input[type='number']").first
+                if await fallback_input.count() == 0:
                     await browser.close()
                     return {
                         "success": False,
-                        "error_code": "COOKIES_EXPIRED",
-                        "message": "cookies expired please tell admin to update"
+                        "error_code": "INPUT_NOT_FOUND",
+                        "message": "Could not locate code input fields on netflix.com/tv2."
                     }
-                
-                await browser.close()
-                return {
-                    "success": False,
-                    "error_code": "INPUT_NOT_FOUND",
-                    "message": "Could not locate code input fields on netflix.com/tv2."
-                }
+                await fallback_input.click()
+                await page.keyboard.press("Control+A")
+                await page.keyboard.press("Backspace")
+                await fallback_input.type(clean_code, delay=100)
 
-            # Fill code into updated input element
-            if await page.locator("input[data-uia^='pin-number-']").count() >= 8:
-                # Explicitly fill split boxes by their direct ID mappings
-                for i in range(8):
-                    inp = page.locator(f"input[data-uia='pin-number-{i}']")
-                    await inp.focus()
-                    await inp.fill("")
-                    await inp.type(clean_code[i], delay=80)
-            elif input_count >= 8:
-                for i in range(min(8, input_count)):
-                    inp = code_input.nth(i)
-                    await inp.focus()
-                    await inp.fill("")
-                    await inp.type(clean_code[i], delay=80)
-            else:
-                main_input = code_input.first
-                await main_input.focus()
-                try:
-                    await main_input.fill("")
-                except Exception:
-                    pass
-                await main_input.type(clean_code, delay=80)
+            await page.wait_for_timeout(1000)
 
-            await page.wait_for_timeout(800)
-
-            # Updated submit button matching new Netflix UI (data-uia="continue-button")
+            # 3. Submit code (if not auto-submitted by Netflix)
             submit_btn = page.locator("button[data-uia='continue-button'], button[type='submit'], button[data-uia*='submit'], button[data-uia*='continue']")
             if await submit_btn.count() > 0 and await submit_btn.first.is_visible():
-                await submit_btn.first.click()
+                try:
+                    await submit_btn.first.click(timeout=3000)
+                except Exception:
+                    await page.keyboard.press("Enter")
             else:
                 await page.keyboard.press("Enter")
 
-            await page.wait_for_timeout(3500)
+            # Allow time for Netflix server to respond
+            await page.wait_for_timeout(4000)
 
-            page_content = (await page.content()).lower()
-            error_keywords = ["incorrect", "invalid code", "code expired", "try again", "unable to connect", "something went wrong"]
-            has_error = any(err in page_content for err in error_keywords)
+            # 4. Check for ACTUAL visible error elements
+            error_locators = page.locator("[data-uia*='error'], .ui-message-error, .ui-message-contents, [data-hcw-form-control-validation]")
+            error_count = await error_locators.count()
 
-            if has_error:
-                error_elem = page.locator("[data-uia*='error'], .ui-message-error, .ui-message-contents, [data-hcw-form-control-validation]")
-                err_msg = "Invalid or expired TV code. Please check your TV screen."
-                if await error_elem.count() > 0:
-                    try:
-                        err_msg = await error_elem.first.inner_text()
-                    except Exception:
-                        pass
-                
-                await browser.close()
-                return {
-                    "success": False,
-                    "error_code": "ACTIVATION_FAILED",
-                    "message": err_msg
-                }
+            if error_count > 0:
+                for idx in range(error_count):
+                    el = error_locators.nth(idx)
+                    if await el.is_visible():
+                        err_text = (await el.inner_text()).strip()
+                        if err_text:
+                            await browser.close()
+                            return {
+                                "success": False,
+                                "error_code": "ACTIVATION_FAILED",
+                                "message": err_text
+                            }
 
+            # 5. Check if activation succeeded (URL change or presence of success message/absence of inputs)
             await browser.close()
             return {"success": True, "message": "netflix activated"}
 
