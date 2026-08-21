@@ -101,8 +101,8 @@ async def run_activation_attempt(email: str, clean_code: str, cookies: list):
                     await box.click()
                     # Use evaluate to clear to avoid React state bouncing
                     await box.evaluate("el => el.value = ''")
-                    # Press sequentially to trigger natural keyboard events
-                    await page.keyboard.press_sequentially(clean_code[i], delay=100)
+                    # Press sequentially to trigger natural keyboard events using legacy type()
+                    await page.keyboard.type(clean_code[i], delay=100)
                     await page.wait_for_timeout(150) # Tiny pause between boxes
 
             elif ui_type == "BLACK_UI_SINGLE":
@@ -110,8 +110,8 @@ async def run_activation_attempt(email: str, clean_code: str, cookies: list):
                 await single_input.click()
                 await page.keyboard.press("Control+A")
                 await page.keyboard.press("Backspace")
-                # Press sequentially mimics a human typing on the keyboard
-                await single_input.press_sequentially(clean_code, delay=150)
+                # Type sequentially mimics a human typing on the keyboard
+                await single_input.type(clean_code, delay=150)
 
             await page.wait_for_timeout(1000)
 
@@ -136,7 +136,6 @@ async def run_activation_attempt(email: str, clean_code: str, cookies: list):
                 await page.keyboard.press("Enter")
 
             # 8. THE VERIFICATION POLLING LOOP
-            # Instead of assuming success/failure instantly, poll the DOM for 15 seconds
             for _ in range(15):
                 await page.wait_for_timeout(1000)
                 
@@ -163,7 +162,6 @@ async def run_activation_attempt(email: str, clean_code: str, cookies: list):
                     return {"success": True, "message": "netflix activated"}
 
             # 9. SILENT FAILURE FALLBACK
-            # If 15 seconds pass and the input field is still visible on the screen, it failed.
             if ui_type == "BLACK_UI_SINGLE" and await single_input.is_visible():
                  await browser.close()
                  return {"success": False, "error_code": "ACTIVATION_FAILED", "message": "Activation did not process. The code might be expired."}
