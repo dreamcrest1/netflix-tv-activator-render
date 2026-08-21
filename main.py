@@ -11,7 +11,8 @@ from profile_manager import (
 from data_manager import (
     get_settings, update_settings, log_activation,
     check_activation_limit, get_activation_stats, export_full_state_b64,
-    record_pageview, toggle_block_number, get_blocked_numbers
+    record_pageview, toggle_block_number, get_blocked_numbers,
+    get_debug_logs, clear_debug_logs
 )
 from activation_engine import activate_tv
 
@@ -238,7 +239,7 @@ HTML_CONTENT = """
         }
 
         async function fetchWithTimeout(resource, options = {}) {
-            const { timeout = 50000 } = options;
+            const { timeout = 65000 } = options;
             const controller = new AbortController();
             const id = setTimeout(() => controller.abort(), timeout);
             try {
@@ -318,7 +319,7 @@ HTML_CONTENT = """
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ mobile: verifiedMobile, code }),
-                    timeout: 50000
+                    timeout: 60000
                 });
                 const data = await res.json();
 
@@ -408,7 +409,7 @@ ADMIN_HTML_CONTENT = """
                         ADMIN CONTROL CENTER
                         <span class="text-xs bg-red-950 text-nred border border-red-900 px-2 py-0.5 rounded font-mono">PRO</span>
                     </h1>
-                    <p class="text-xs text-zinc-400">Full System Metrics, User Blacklist, Cookies & Activation Logs</p>
+                    <p class="text-xs text-zinc-400">Full System Metrics, Diagnostic Engine & Step-by-Step Execution Logs</p>
                 </div>
             </div>
             <a href="/" class="bg-zinc-800 hover:bg-zinc-700 text-zinc-200 px-4 py-2 rounded-xl text-xs font-bold transition flex items-center gap-2">
@@ -443,8 +444,37 @@ ADMIN_HTML_CONTENT = """
                     <div id="statSuccess" class="text-2xl font-bold font-mono text-emerald-400 mt-1">0</div>
                 </div>
                 <div class="glass-card p-4 rounded-xl">
-                    <div class="text-[11px] font-bold text-zinc-400 uppercase">Blocked Numbers</div>
-                    <div id="statBlocked" class="text-2xl font-bold font-mono text-red-500 mt-1">0</div>
+                    <div class="text-[11px] font-bold text-zinc-400 uppercase">Failed Activations</div>
+                    <div id="statFailed" class="text-2xl font-bold font-mono text-red-500 mt-1">0</div>
+                </div>
+            </div>
+
+            <!-- STEP-BY-STEP DIAGNOSTIC PANEL -->
+            <div class="glass-card p-5 rounded-2xl space-y-4 border border-zinc-800">
+                <div class="flex flex-col md:flex-row justify-between items-start md:items-center gap-2 border-b border-zinc-800 pb-3">
+                    <div>
+                        <h3 class="text-sm font-bold text-white uppercase flex items-center gap-2">
+                            <i class="fa-solid fa-bug text-nred"></i> In-Depth Diagnostic & Execution Logs
+                        </h3>
+                        <p class="text-[11px] text-zinc-400">Inspect the exact second-by-second timeline of every single activation attempt</p>
+                    </div>
+                    <div class="flex items-center gap-2">
+                        <select id="debugFilter" onchange="filterDebugLogs()" class="bg-zinc-950 border border-zinc-800 rounded-lg px-2.5 py-1 text-xs text-zinc-300 focus:outline-none">
+                            <option value="ALL">Show All Actions</option>
+                            <option value="FAILED">Failed Only</option>
+                            <option value="SUCCESS">Success Only</option>
+                        </select>
+                        <button onclick="loadAdminStats()" class="bg-zinc-800 hover:bg-zinc-700 text-xs px-3 py-1 rounded-lg text-zinc-200">
+                            <i class="fa-solid fa-arrows-rotate"></i> Refresh
+                        </button>
+                        <button onclick="clearAllDebugLogs()" class="bg-red-950 hover:bg-red-900 text-red-300 text-xs px-3 py-1 rounded-lg">
+                            <i class="fa-solid fa-trash"></i> Clear
+                        </button>
+                    </div>
+                </div>
+
+                <div id="debugLogsContainer" class="space-y-3 max-h-96 overflow-y-auto pr-1">
+                    <div class="text-xs text-zinc-500 italic p-4 text-center">Loading diagnostic logs...</div>
                 </div>
             </div>
 
@@ -532,35 +562,9 @@ ADMIN_HTML_CONTENT = """
                 </div>
             </div>
 
-            <div class="glass-card p-5 rounded-2xl space-y-3">
-                <div class="flex justify-between items-center">
-                    <h3 class="text-xs font-bold text-zinc-300 uppercase flex items-center gap-2">
-                        <i class="fa-solid fa-list-check"></i> Audit Activation Trail Logs
-                    </h3>
-                    <input type="text" id="logSearchInput" onkeyup="filterAuditLogs()" placeholder="Search mobile or email..."
-                           class="bg-zinc-950 border border-zinc-800 rounded-lg px-2.5 py-1 text-[11px] text-white focus:outline-none w-48 font-mono">
-                </div>
-                <div class="max-h-64 overflow-y-auto">
-                    <table class="w-full text-left text-xs text-zinc-300 border-collapse">
-                        <thead>
-                            <tr class="border-b border-zinc-800 text-zinc-500">
-                                <th class="py-2">Timestamp</th>
-                                <th class="py-2">Mobile</th>
-                                <th class="py-2">Profile Email</th>
-                                <th class="py-2">TV Code</th>
-                                <th class="py-2">Status</th>
-                            </tr>
-                        </thead>
-                        <tbody id="auditLogsTbody">
-                            <tr><td colspan="5" class="py-2 text-zinc-500 italic">No logs recorded yet.</td></tr>
-                        </tbody>
-                    </table>
-                </div>
-            </div>
-
             <div class="glass-card p-5 rounded-2xl space-y-2 border-blue-900/40">
                 <h3 class="text-xs font-bold text-zinc-300 uppercase">Server Restart Persistence Backup</h3>
-                <p class="text-[11px] text-zinc-400">Copy this backup string and add it as an Environment Variable named <code class="text-amber-400 bg-zinc-950 px-1 py-0.5 rounded font-mono">PROFILES_JSON_DATA</code> in Render settings. That way, all settings, logs, blocked numbers, and cookies will NEVER reset when Render restarts!</p>
+                <p class="text-[11px] text-zinc-400">Copy this backup string and add it as an Environment Variable named <code class="text-amber-400 bg-zinc-950 px-1 py-0.5 rounded font-mono">PROFILES_JSON_DATA</code> in Render settings.</p>
                 <button onclick="copyEnvBackup()" id="btnEnvBackup" class="w-full bg-blue-600 hover:bg-blue-700 text-white font-bold py-2.5 rounded-xl text-xs transition">
                     📋 Copy Persistent ENV Backup String
                 </button>
@@ -573,7 +577,7 @@ ADMIN_HTML_CONTENT = """
     <script>
         let adminTokenPassword = "";
         let currentTargetProfile = "";
-        let rawLogsData = [];
+        let rawDebugLogs = [];
 
         async function loginAdmin() {
             const pwd = document.getElementById('adminPassword').value;
@@ -630,7 +634,7 @@ ADMIN_HTML_CONTENT = """
                 document.getElementById('statPageviews').innerText = data.pageviews || 0;
                 document.getElementById('statVisitors').innerText = data.unique_visitors || 0;
                 document.getElementById('statSuccess').innerText = data.successful_logs || 0;
-                document.getElementById('statBlocked').innerText = data.blocked_count || 0;
+                document.getElementById('statFailed').innerText = data.failed_logs || 0;
 
                 if (data.settings) {
                     document.getElementById('limitMonthly').value = data.settings.max_monthly_activations ?? 3;
@@ -665,44 +669,81 @@ ADMIN_HTML_CONTENT = """
                     userTbody.innerHTML = `<tr><td colspan="6" class="py-2 text-zinc-500 italic">No user data yet.</td></tr>`;
                 }
 
-                rawLogsData = data.recent_logs || [];
-                renderAuditLogs(rawLogsData);
+                rawDebugLogs = data.debug_logs || [];
+                renderDebugLogs(rawDebugLogs);
             }
         }
 
-        function renderAuditLogs(logs) {
-            const auditTbody = document.getElementById('auditLogsTbody');
-            auditTbody.innerHTML = '';
-            if (logs && logs.length > 0) {
-                logs.forEach(l => {
-                    const tr = document.createElement('tr');
-                    tr.className = 'border-b border-zinc-800/50 text-[11px]';
-                    tr.innerHTML = `
-                        <td class="py-2 font-mono text-zinc-400">${l.timestamp}</td>
-                        <td class="py-2 font-mono font-bold text-white">${l.mobile}</td>
-                        <td class="py-2 font-mono text-zinc-300">${l.email}</td>
-                        <td class="py-2 font-mono text-amber-300">${l.code}</td>
-                        <td class="py-2 font-mono">
-                            <span class="px-2 py-0.5 rounded-full text-[10px] ${l.success ? 'bg-emerald-950 text-emerald-400 border border-emerald-800' : 'bg-red-950 text-red-400 border border-red-800'}">
-                                ${l.success ? 'SUCCESS' : 'FAILED'}
-                            </span>
-                        </td>
-                    `;
-                    auditTbody.appendChild(tr);
-                });
-            } else {
-                auditTbody.innerHTML = `<tr><td colspan="5" class="py-2 text-zinc-500 italic">No logs recorded yet.</td></tr>`;
-            }
-        }
+        function renderDebugLogs(logs) {
+            const container = document.getElementById('debugLogsContainer');
+            container.innerHTML = '';
 
-        function filterAuditLogs() {
-            const query = document.getElementById('logSearchInput').value.toLowerCase().trim();
-            if (!query) {
-                renderAuditLogs(rawLogsData);
+            if (!logs || logs.length === 0) {
+                container.innerHTML = `<div class="text-xs text-zinc-500 italic p-4 text-center">No diagnostic logs recorded yet.</div>`;
                 return;
             }
-            const filtered = rawLogsData.filter(l => l.mobile.toLowerCase().includes(query) || l.email.toLowerCase().includes(query));
-            renderAuditLogs(filtered);
+
+            logs.forEach(log => {
+                const card = document.createElement('div');
+                const isSuccess = log.success;
+                card.className = `p-3 rounded-xl border ${isSuccess ? 'bg-zinc-950 border-emerald-950' : 'bg-zinc-950 border-red-950'} text-xs space-y-2`;
+                
+                let stepsHtml = '';
+                if (log.steps && log.steps.length > 0) {
+                    stepsHtml = log.steps.map(s => `<div class="text-[11px] font-mono ${s.includes('error') || s.includes('Exception') || s.includes('rejected') ? 'text-red-400' : 'text-zinc-400'}">${s}</div>`).join('');
+                } else {
+                    stepsHtml = '<div class="text-zinc-500 text-[11px]">No steps recorded.</div>';
+                }
+
+                card.innerHTML = `
+                    <div class="flex justify-between items-start">
+                        <div>
+                            <span class="font-bold text-white font-mono">${log.mobile}</span>
+                            <span class="text-zinc-400 font-mono">(${log.email})</span>
+                            <span class="text-amber-400 font-mono ml-2">Code: ${log.code}</span>
+                        </div>
+                        <div class="flex items-center gap-2">
+                            <span class="text-zinc-500 text-[10px] font-mono">${log.timestamp}</span>
+                            <span class="px-2 py-0.5 rounded text-[10px] font-bold ${isSuccess ? 'bg-emerald-950 text-emerald-400 border border-emerald-800' : 'bg-red-950 text-red-400 border border-red-800'}">
+                                ${isSuccess ? 'SUCCESS' : 'FAILED'}
+                            </span>
+                        </div>
+                    </div>
+                    <div class="text-[11px] font-semibold ${isSuccess ? 'text-emerald-400' : 'text-red-400'}">
+                        Result: ${log.message}
+                    </div>
+                    <details class="bg-black/50 p-2.5 rounded-lg border border-zinc-900">
+                        <summary class="text-zinc-400 text-[10px] cursor-pointer hover:text-white uppercase font-bold">
+                            View Second-by-Second Execution Trace (${log.steps ? log.steps.length : 0} steps)
+                        </summary>
+                        <div class="mt-2 space-y-1 pl-1 border-l-2 border-zinc-800">
+                            ${stepsHtml}
+                        </div>
+                    </details>
+                `;
+                container.appendChild(card);
+            });
+        }
+
+        function filterDebugLogs() {
+            const filter = document.getElementById('debugFilter').value;
+            if (filter === 'ALL') {
+                renderDebugLogs(rawDebugLogs);
+            } else if (filter === 'FAILED') {
+                renderDebugLogs(rawDebugLogs.filter(l => !l.success));
+            } else if (filter === 'SUCCESS') {
+                renderDebugLogs(rawDebugLogs.filter(l => l.success));
+            }
+        }
+
+        async function clearAllDebugLogs() {
+            if (!confirm("Clear all diagnostic logs?")) return;
+            await fetch('/api/admin/debug-logs/clear', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ password: adminTokenPassword })
+            });
+            loadAdminStats();
         }
 
         async function toggleBlockUser(mobile, block) {
@@ -893,6 +934,13 @@ async def admin_get_stats(password: str):
         raise HTTPException(status_code=401, detail="Unauthorized")
     return get_activation_stats()
 
+@app.post("/api/admin/debug-logs/clear")
+async def admin_clear_debug(data: dict = Body(...)):
+    if data.get("password") != ADMIN_PASSWORD:
+        raise HTTPException(status_code=401, detail="Unauthorized")
+    clear_debug_logs()
+    return {"success": True}
+
 @app.post("/api/admin/block-number")
 async def admin_block_number(data: dict = Body(...)):
     if data.get("password") != ADMIN_PASSWORD:
@@ -939,25 +987,6 @@ async def admin_export_env(data: dict = Body(...)):
         raise HTTPException(status_code=401, detail="Unauthorized")
     b64_str = export_full_state_b64()
     return {"b64_str": b64_str}
-
-@app.post("/api/admin/sheet-test")
-async def admin_sheet_test(data: dict = Body(...)):
-    if data.get("password") != ADMIN_PASSWORD:
-        raise HTTPException(status_code=401, detail="Unauthorized")
-    
-    import requests, csv, io
-    sheet_url = DEFAULT_SHEET_URL
-    try:
-        r = requests.get(sheet_url, timeout=10)
-        reader = list(csv.DictReader(io.StringIO(r.text)))
-        return {
-            "status": "connected",
-            "columns": list(reader[0].keys()) if reader else [],
-            "row_count": len(reader),
-            "sample_first_row": reader[0] if reader else {}
-        }
-    except Exception as e:
-        return {"status": "error", "message": str(e)}
 
 if __name__ == "__main__":
     import uvicorn
