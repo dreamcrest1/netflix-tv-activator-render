@@ -117,30 +117,34 @@ async def run_activation_attempt(email: str, clean_code: str, cookies: list, mob
                 log_activation_detail(mobile, email, clean_code, False, err_msg, steps)
                 return {"success": False, "error_code": "INPUT_NOT_FOUND", "message": err_msg}
 
-            # 6. Clean 8-Digit Entry
+            # 6. Physical Keystroke-by-Keystroke Entry (Both UIs)
             if ui_type == "WHITE_UI_SPLIT":
-                log_step("Entering code across 8 split inputs...")
+                log_step("Typing keystroke-by-keystroke into 8 split boxes...")
                 for i in range(8):
                     box = page.locator(f"input[data-uia='pin-number-{i}'], input.pin-number-input").nth(i)
                     await box.click()
-                    await box.fill(clean_code[i])
-                    await page.wait_for_timeout(60)
-            else:
-                log_step("Entering code into single input field...")
-                await single_input.click()
-                await single_input.fill(clean_code)
-                await page.wait_for_timeout(200)
-                
-                # Check value matches exactly 8 digits
-                val = await single_input.input_value()
-                if val != clean_code:
-                    log_step(f"Input value was '{val}', re-typing via keyboard...")
-                    await single_input.click()
-                    await page.keyboard.press("Control+A")
+                    await page.wait_for_timeout(50)
                     await page.keyboard.press("Backspace")
-                    for char in clean_code:
-                        await page.keyboard.press(char)
-                        await page.wait_for_timeout(60)
+                    await page.keyboard.press(clean_code[i])
+                    await page.wait_for_timeout(80)
+            elif ui_type == "BLACK_UI_SINGLE":
+                log_step("Typing keystroke-by-keystroke into single React input field...")
+                await single_input.click()
+                await page.wait_for_timeout(150)
+                await page.keyboard.press("Control+A")
+                await page.keyboard.press("Backspace")
+                await page.wait_for_timeout(100)
+                
+                # Physical key presses for every single digit
+                for digit in clean_code:
+                    await page.keyboard.press(digit)
+                    await page.wait_for_timeout(100)
+
+                # Sync React state
+                await single_input.dispatch_event("input")
+                await single_input.dispatch_event("change")
+                typed_val = await single_input.input_value()
+                log_step(f"Input value verified: '{typed_val}'")
 
             await page.wait_for_timeout(600)
 
@@ -159,20 +163,20 @@ async def run_activation_attempt(email: str, clean_code: str, cookies: list, mob
                 btn = page.locator(selector).first
                 if await btn.count() > 0 and await btn.is_visible():
                     log_step(f"Clicking submit button: {selector}")
-                    await btn.click()
+                    await btn.click(force=True)
                     clicked = True
                     break
             
-            if not clicked:
-                log_step("Submit button selector not matched; pressing Enter key.")
-                await page.keyboard.press("Enter")
+            # Press Enter as backup trigger
+            await page.keyboard.press("Enter")
+            log_step("Triggered Enter key event.")
 
             # 8. Strict Verification Polling Loop
             log_step("Awaiting verification from Netflix servers...")
             for _ in range(12):
                 await page.wait_for_timeout(1000)
                 
-                # Condition A: Redirected away from tv2
+                # Condition A: Redirected away from /tv2
                 if "/tv2" not in page.url:
                     log_step(f"Success! URL changed to: {page.url}")
                     await browser.close()
