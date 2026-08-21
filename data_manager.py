@@ -78,6 +78,7 @@ def _ensure_storage():
             "settings": DEFAULT_SETTINGS,
             "blocked_numbers": [],
             "logs": [],
+            "debug_logs": [],
             "metrics": {
                 "pageviews": 0,
                 "unique_ips": []
@@ -103,65 +104,34 @@ def load_app_data():
     upstash_data = load_from_upstash()
     
     env_backup = get_env_backup_data()
-    if upstash_data:
-        if (not upstash_data.get("logs") or len(upstash_data.get("logs", [])) == 0) and env_backup and env_backup.get("logs"):
-            upstash_data["logs"] = env_backup.get("logs", [])
-            if not upstash_data.get("profiles") and env_backup.get("profiles"):
-                upstash_data["profiles"] = env_backup.get("profiles", {})
-            save_to_upstash(upstash_data)
-
-        if "settings" not in upstash_data:
-            upstash_data["settings"] = DEFAULT_SETTINGS
-        if "blocked_numbers" not in upstash_data:
-            upstash_data["blocked_numbers"] = []
-        if "logs" not in upstash_data:
-            upstash_data["logs"] = []
-        if "profiles" not in upstash_data:
-            upstash_data["profiles"] = {}
-        if "metrics" not in upstash_data:
-            upstash_data["metrics"] = {"pageviews": 0, "unique_ips": []}
-        return upstash_data
-
-    try:
-        if os.path.exists(APP_DATA_FILE):
+    data = upstash_data or {}
+    
+    if not data and os.path.exists(APP_DATA_FILE):
+        try:
             with open(APP_DATA_FILE, "r", encoding="utf-8") as f:
                 content = f.read().strip()
                 if content:
-                    d = json.loads(content)
-                    if "settings" not in d:
-                        d["settings"] = DEFAULT_SETTINGS
-                    if "blocked_numbers" not in d:
-                        d["blocked_numbers"] = []
-                    if "logs" not in d:
-                        d["logs"] = []
-                    if "profiles" not in d:
-                        d["profiles"] = {}
-                    if "metrics" not in d:
-                        d["metrics"] = {"pageviews": 0, "unique_ips": []}
-                    return d
-    except Exception:
-        pass
+                    data = json.loads(content)
+        except Exception:
+            pass
 
-    if env_backup:
-        if "settings" not in env_backup:
-            env_backup["settings"] = DEFAULT_SETTINGS
-        if "blocked_numbers" not in env_backup:
-            env_backup["blocked_numbers"] = []
-        if "logs" not in env_backup:
-            env_backup["logs"] = []
-        if "profiles" not in env_backup:
-            env_backup["profiles"] = {}
-        if "metrics" not in env_backup:
-            env_backup["metrics"] = {"pageviews": 0, "unique_ips": []}
-        return env_backup
+    if not data and env_backup:
+        data = env_backup
 
-    return {
-        "profiles": {},
-        "settings": DEFAULT_SETTINGS,
-        "blocked_numbers": [],
-        "logs": [],
-        "metrics": {"pageviews": 0, "unique_ips": []}
-    }
+    if "settings" not in data:
+        data["settings"] = DEFAULT_SETTINGS
+    if "blocked_numbers" not in data:
+        data["blocked_numbers"] = []
+    if "logs" not in data:
+        data["logs"] = []
+    if "debug_logs" not in data:
+        data["debug_logs"] = []
+    if "profiles" not in data:
+        data["profiles"] = {}
+    if "metrics" not in data:
+        data["metrics"] = {"pageviews": 0, "unique_ips": []}
+
+    return data
 
 def save_app_data(data):
     _ensure_storage()
@@ -304,6 +274,40 @@ def log_activation(mobile: str, email: str, code: str, success: bool, message: s
     save_app_data(data)
     return entry
 
+def log_activation_detail(mobile: str, email: str, code: str, success: bool, message: str, steps: list):
+    data = load_app_data()
+    if "debug_logs" not in data:
+        data["debug_logs"] = []
+
+    clean_mobile = str(mobile).strip()
+    if len(clean_mobile) > 10:
+        clean_mobile = clean_mobile[-10:]
+
+    detail_entry = {
+        "id": len(data["debug_logs"]) + 1,
+        "timestamp": time.strftime("%Y-%m-%d %H:%M:%S"),
+        "mobile": clean_mobile or "N/A",
+        "email": str(email).strip().lower() or "N/A",
+        "code": str(code).strip() or "N/A",
+        "success": bool(success),
+        "message": str(message),
+        "steps": steps or []
+    }
+    data["debug_logs"].insert(0, detail_entry)
+    data["debug_logs"] = data["debug_logs"][:500]  # Store last 500 in-depth executions
+    save_app_data(data)
+    return detail_entry
+
+def get_debug_logs():
+    data = load_app_data()
+    return data.get("debug_logs", [])
+
+def clear_debug_logs():
+    data = load_app_data()
+    data["debug_logs"] = []
+    save_app_data(data)
+    return True
+
 def check_activation_limit(mobile: str):
     if is_number_blocked(mobile):
         return False, "This mobile number has been suspended. Please contact support via WhatsApp."
@@ -337,12 +341,14 @@ def check_activation_limit(mobile: str):
 def get_activation_stats():
     data = load_app_data()
     logs = data.get("logs", [])
+    debug_logs = data.get("debug_logs", [])
     settings = get_settings()
     blocked = data.get("blocked_numbers", [])
     metrics = data.get("metrics", {"pageviews": 0, "unique_ips": []})
 
     total_activations = sum(1 for l in logs if l.get("action") == "ACTIVATE")
     successful_activations = sum(1 for l in logs if l.get("success") and l.get("action") == "ACTIVATE")
+    failed_activations = sum(1 for l in logs if not l.get("success") and l.get("action") == "ACTIVATE")
     
     user_stats = {}
     current_month = time.strftime("%Y-%m")
@@ -379,11 +385,13 @@ def get_activation_stats():
         "unique_visitors": len(metrics.get("unique_ips", [])),
         "total_logs": total_activations,
         "successful_logs": successful_activations,
+        "failed_logs": failed_activations,
         "unique_users_count": len(user_stats),
         "blocked_count": len(blocked),
         "settings": settings,
         "user_stats": sorted(list(user_stats.values()), key=lambda x: x["total"], reverse=True),
-        "recent_logs": logs[:500]
+        "recent_logs": logs[:200],
+        "debug_logs": debug_logs[:200]
     }
 
 def export_full_state_b64():
