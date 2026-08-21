@@ -80,16 +80,16 @@ async def run_activation_attempt(email: str, clean_code: str, cookies: list, mob
             try:
                 await page.goto("https://www.netflix.com/tv2", wait_until="domcontentloaded", timeout=20000)
             except PlaywrightTimeoutError:
-                log_step("Page load slow, proceeding with commit...")
+                log_step("Page load slow, forcing commit...")
                 await page.goto("https://www.netflix.com/tv2", wait_until="commit", timeout=10000)
 
             await page.wait_for_timeout(1500)
             current_url = page.url
             log_step(f"Landed on URL: {current_url}")
 
-            # 4. Check for Session Expiry / Login Page
+            # 4. Check for Expired Session / Login Page
             if "login" in current_url or await page.locator("input[name='userLoginId']").count() > 0:
-                log_step("Redirected to login. Session cookies expired.")
+                log_step("Redirected to login page. Session cookies expired.")
                 await browser.close()
                 err_msg = "Cookies expired. Please update via admin panel."
                 log_activation_detail(mobile, email, clean_code, False, err_msg, steps)
@@ -117,47 +117,40 @@ async def run_activation_attempt(email: str, clean_code: str, cookies: list, mob
                 log_activation_detail(mobile, email, clean_code, False, err_msg, steps)
                 return {"success": False, "error_code": "INPUT_NOT_FOUND", "message": err_msg}
 
-            # 6. React-Native Value Injection + Physical Typing
+            # 6. Clean 8-Digit Entry
             if ui_type == "WHITE_UI_SPLIT":
-                log_step("Typing code across 8 split inputs...")
+                log_step("Entering code across 8 split inputs...")
                 for i in range(8):
-                    box = split_inputs.nth(i)
+                    box = page.locator(f"input[data-uia='pin-number-{i}'], input.pin-number-input").nth(i)
                     await box.click()
-                    await box.evaluate("el => el.value = ''")
-                    await box.type(clean_code[i], delay=60)
+                    await box.fill(clean_code[i])
+                    await page.wait_for_timeout(60)
             else:
-                log_step("Injecting value into React-controlled single input...")
+                log_step("Entering code into single input field...")
                 await single_input.click()
-                await page.keyboard.press("Control+A")
-                await page.keyboard.press("Backspace")
+                await single_input.fill(clean_code)
+                await page.wait_for_timeout(200)
                 
-                # Update React Fiber value tracker and dispatch standard synthetic events
-                await page.evaluate(f"""
-                    () => {{
-                        const input = document.querySelector("input[name='rendezvousCode'], input[autocomplete='one-time-code']");
-                        if (input) {{
-                            const lastValue = input.value;
-                            input.value = '{clean_code}';
-                            const tracker = input._valueTracker;
-                            if (tracker) {{
-                                tracker.setValue(lastValue);
-                            }}
-                            input.dispatchEvent(new Event('input', {{ bubbles: true }}));
-                            input.dispatchEvent(new Event('change', {{ bubbles: true }}));
-                        }}
-                    }}
-                """)
-                
-                # Also physically type into the input to ensure all keystroke listeners register
-                await single_input.type(clean_code, delay=60)
+                # Check value matches exactly 8 digits
+                val = await single_input.input_value()
+                if val != clean_code:
+                    log_step(f"Input value was '{val}', re-typing via keyboard...")
+                    await single_input.click()
+                    await page.keyboard.press("Control+A")
+                    await page.keyboard.press("Backspace")
+                    for char in clean_code:
+                        await page.keyboard.press(char)
+                        await page.wait_for_timeout(60)
 
-            await page.wait_for_timeout(800)
+            await page.wait_for_timeout(600)
 
             # 7. Form Submission
             submit_selectors = [
-                "button[data-uia='continue-button']", 
-                "button:has-text('Enter Code to Continue')", 
-                "button:has-text('Continue')", 
+                "button[data-uia='continue-button']",
+                "button[data-uia='witcher-code-submit']",
+                "button.tvsignup-continue-button",
+                "button:has-text('Enter Code to Continue')",
+                "button:has-text('Continue')",
                 "button[type='submit']"
             ]
             
@@ -166,36 +159,41 @@ async def run_activation_attempt(email: str, clean_code: str, cookies: list, mob
                 btn = page.locator(selector).first
                 if await btn.count() > 0 and await btn.is_visible():
                     log_step(f"Clicking submit button: {selector}")
-                    await btn.click(force=True)
+                    await btn.click()
                     clicked = True
                     break
             
-            # Press Enter as secondary trigger
-            await page.keyboard.press("Enter")
-            log_step("Sent Enter key event.")
+            if not clicked:
+                log_step("Submit button selector not matched; pressing Enter key.")
+                await page.keyboard.press("Enter")
 
             # 8. Strict Verification Polling Loop
             log_step("Awaiting verification from Netflix servers...")
-            for second in range(12):
+            for _ in range(12):
                 await page.wait_for_timeout(1000)
                 
-                # Check for Success URL redirect
+                # Condition A: Redirected away from tv2
                 if "/tv2" not in page.url:
                     log_step(f"Success! URL changed to: {page.url}")
                     await browser.close()
                     log_activation_detail(mobile, email, clean_code, True, "Activation successful (URL Redirected)", steps)
                     return {"success": True, "message": "netflix activated"}
 
-                # Check for explicit on-screen Success elements
-                success_text = page.locator("text='connected', text='Ready to watch', text='Success', text='Start Watching', text='All set', text='signed in'")
+                # Condition B: On-screen Success elements
+                success_text = page.locator("text='connected', text='Connected', text='Ready to watch', text='Start Watching', text='All set', text='signed in', text='Signed In'")
                 if await success_text.count() > 0 and await success_text.first.is_visible():
                     log_step("Success confirmation detected on page.")
                     await browser.close()
                     log_activation_detail(mobile, email, clean_code, True, "Activation successful (Confirmation text displayed)", steps)
                     return {"success": True, "message": "netflix activated"}
 
-                # Check for explicit Error messages / Validation errors
-                error_locators = page.locator("[aria-invalid='true'], div[data-hcw-form-control-validation='true'], [data-uia*='error'], .ui-message-error, .ui-message-contents")
+                # Condition C: Explicit Error Banner
+                error_locators = page.locator(
+                    "[data-uia='witcher-code-input-error'], "
+                    "[data-hcw-form-control-validation='true'], "
+                    "[data-uia*='error'], "
+                    ".ui-message-error, .ui-message-contents, .error-box"
+                )
                 if await error_locators.count() > 0:
                     for idx in range(await error_locators.count()):
                         el = error_locators.nth(idx)
@@ -207,7 +205,7 @@ async def run_activation_attempt(email: str, clean_code: str, cookies: list, mob
                                 log_activation_detail(mobile, email, clean_code, False, err_text, steps)
                                 return {"success": False, "error_code": "ACTIVATION_FAILED", "message": err_text}
 
-            # 9. Strict Failure Verdict (If still on /tv2 with no confirmation, it failed)
+            # 9. Failure Verdict
             log_step("Verification timed out while still on /tv2. Marking as failed.")
             await browser.close()
             err_msg = "Invalid or expired TV code. Please check your TV screen."
