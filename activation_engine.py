@@ -117,42 +117,58 @@ async def run_activation_attempt(email: str, clean_code: str, cookies: list, mob
                 log_activation_detail(mobile, email, clean_code, False, err_msg, steps)
                 return {"success": False, "error_code": "INPUT_NOT_FOUND", "message": err_msg}
 
-            # 6. Physical Keystroke-by-Keystroke Entry (Both UIs)
+            # 6. Optimized Code Entry
             if ui_type == "WHITE_UI_SPLIT":
-                log_step("Typing keystroke-by-keystroke into 8 split boxes...")
-                for i in range(8):
-                    box = page.locator(f"input[data-uia='pin-number-{i}'], input.pin-number-input").nth(i)
-                    await box.click()
-                    await page.wait_for_timeout(50)
-                    await page.keyboard.press("Backspace")
-                    await page.keyboard.press(clean_code[i])
-                    await page.wait_for_timeout(80)
-            elif ui_type == "BLACK_UI_SINGLE":
-                log_step("Typing keystroke-by-keystroke into single React input field...")
-                await single_input.click()
-                await page.wait_for_timeout(150)
-                await page.keyboard.press("Control+A")
-                await page.keyboard.press("Backspace")
+                log_step("Focusing first PIN box and typing 8 digits...")
+                first_box = split_inputs.first
+                await first_box.click()
                 await page.wait_for_timeout(100)
                 
-                # Physical key presses for every single digit
+                # Type digits naturally so auto-advance moves focus smoothly
                 for digit in clean_code:
                     await page.keyboard.press(digit)
-                    await page.wait_for_timeout(100)
+                    await page.wait_for_timeout(90)
 
-                # Sync React state
+                # Verification & fallback check for each individual box
+                entered_chars = []
+                for i in range(8):
+                    b = split_inputs.nth(i)
+                    val = await b.input_value()
+                    entered_chars.append(val)
+                    if val != clean_code[i]:
+                        # If focus skipped a box, fill it directly
+                        await b.click()
+                        await b.fill(clean_code[i])
+                
+                log_step(f"White UI PIN boxes verified: {''.join(entered_chars)}")
+
+            elif ui_type == "BLACK_UI_SINGLE":
+                log_step("Entering code into single input field...")
+                await single_input.click()
+                await single_input.fill("")
+                await single_input.fill(clean_code)
+                await page.wait_for_timeout(150)
+                
+                val = await single_input.input_value()
+                if val != clean_code:
+                    await single_input.click()
+                    await page.keyboard.press("Control+A")
+                    await page.keyboard.press("Backspace")
+                    for digit in clean_code:
+                        await page.keyboard.press(digit)
+                        await page.wait_for_timeout(80)
+                
                 await single_input.dispatch_event("input")
                 await single_input.dispatch_event("change")
-                typed_val = await single_input.input_value()
-                log_step(f"Input value verified: '{typed_val}'")
+                log_step(f"Black UI input verified: '{await single_input.input_value()}'")
 
             await page.wait_for_timeout(600)
 
             # 7. Form Submission
             submit_selectors = [
-                "button[data-uia='continue-button']",
                 "button[data-uia='witcher-code-submit']",
                 "button.tvsignup-continue-button",
+                "button[data-uia='continue-button']",
                 "button:has-text('Enter Code to Continue')",
                 "button:has-text('Continue')",
                 "button[type='submit']"
@@ -171,27 +187,40 @@ async def run_activation_attempt(email: str, clean_code: str, cookies: list, mob
             await page.keyboard.press("Enter")
             log_step("Triggered Enter key event.")
 
-            # 8. Strict Verification Polling Loop
+            # 8. Strict Verification Polling Loop (15 seconds)
             log_step("Awaiting verification from Netflix servers...")
-            for _ in range(12):
+            for second in range(15):
                 await page.wait_for_timeout(1000)
                 
-                # Condition A: Redirected away from /tv2
+                # Check for Profile Selection Screen (Common on multi-profile accounts)
+                profile_items = page.locator("[data-uia='action-select-profile'], .profile-link, .profile-icon, [data-uia^='profile-']")
+                if await profile_items.count() > 0 and await profile_items.first.is_visible():
+                    log_step("Profile selection screen detected. Selecting primary profile...")
+                    try:
+                        await profile_items.first.click(timeout=3000)
+                        await page.wait_for_timeout(2000)
+                    except Exception:
+                        pass
+                    await browser.close()
+                    log_activation_detail(mobile, email, clean_code, True, "Activation successful (Profile selected)", steps)
+                    return {"success": True, "message": "netflix activated"}
+
+                # Check for URL change away from /tv2
                 if "/tv2" not in page.url:
-                    log_step(f"Success! URL changed to: {page.url}")
+                    log_step(f"Success! URL redirected to: {page.url}")
                     await browser.close()
                     log_activation_detail(mobile, email, clean_code, True, "Activation successful (URL Redirected)", steps)
                     return {"success": True, "message": "netflix activated"}
 
-                # Condition B: On-screen Success elements
-                success_text = page.locator("text='connected', text='Connected', text='Ready to watch', text='Start Watching', text='All set', text='signed in', text='Signed In'")
+                # Check for On-Screen Success Indicators
+                success_text = page.locator("text='connected', text='Connected', text='Ready to watch', text='Start Watching', text='All set', text='All Set', text='signed in', text='Signed In', text='Return to your TV'")
                 if await success_text.count() > 0 and await success_text.first.is_visible():
-                    log_step("Success confirmation detected on page.")
+                    log_step("Success banner detected on page.")
                     await browser.close()
                     log_activation_detail(mobile, email, clean_code, True, "Activation successful (Confirmation text displayed)", steps)
                     return {"success": True, "message": "netflix activated"}
 
-                # Condition C: Explicit Error Banner
+                # Check for Explicit Error Banners
                 error_locators = page.locator(
                     "[data-uia='witcher-code-input-error'], "
                     "[data-hcw-form-control-validation='true'], "
