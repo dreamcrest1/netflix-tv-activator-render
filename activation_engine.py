@@ -75,25 +75,48 @@ async def run_activation_attempt(email: str, clean_code: str, cookies: list, mob
 
             page = await context.new_page()
 
-            # 3. Navigate to tv2
-            log_step("Navigating to https://www.netflix.com/tv2...")
+            # 3. PRE-FLIGHT CHECK: Verify Cookies via netflix.com/youraccount
+            log_step("Validating cookies on https://www.netflix.com/youraccount...")
             try:
-                await page.goto("https://www.netflix.com/tv2", wait_until="domcontentloaded", timeout=20000)
+                await page.goto("https://www.netflix.com/youraccount", wait_until="domcontentloaded", timeout=15000)
             except PlaywrightTimeoutError:
-                log_step("Page load slow, forcing commit...")
+                await page.goto("https://www.netflix.com/youraccount", wait_until="commit", timeout=10000)
+
+            await page.wait_for_timeout(1500)
+            acc_url = page.url
+            log_step(f"Account verification landed on: {acc_url}")
+
+            # Check if redirected to login page or login form appeared
+            is_login_page = (
+                "login" in acc_url 
+                or "signin" in acc_url 
+                or await page.locator("text='Enter your info to sign in'").count() > 0
+                or await page.locator("input[name='userLoginId'], input[autocomplete='email']").count() > 0
+            )
+
+            if is_login_page:
+                log_step("Redirected to login. Cookies are expired!")
+                await browser.close()
+                err_msg = "cookies expired please tell admin to update"
+                log_activation_detail(mobile, email, clean_code, False, err_msg, steps)
+                return {
+                    "success": False, 
+                    "error_code": "COOKIES_EXPIRED", 
+                    "message": err_msg
+                }
+
+            log_step("Session cookies confirmed active! Proceeding to netflix.com/tv2...")
+
+            # 4. Navigate to Activation Page
+            try:
+                await page.goto("https://www.netflix.com/tv2", wait_until="domcontentloaded", timeout=18000)
+            except PlaywrightTimeoutError:
+                log_step("tv2 page load slow, forcing commit...")
                 await page.goto("https://www.netflix.com/tv2", wait_until="commit", timeout=10000)
 
             await page.wait_for_timeout(1500)
             current_url = page.url
             log_step(f"Landed on URL: {current_url}")
-
-            # 4. Check for Expired Session / Login Page
-            if "login" in current_url or await page.locator("input[name='userLoginId']").count() > 0:
-                log_step("Redirected to login page. Session cookies expired.")
-                await browser.close()
-                err_msg = "Cookies expired. Please update via admin panel."
-                log_activation_detail(mobile, email, clean_code, False, err_msg, steps)
-                return {"success": False, "error_code": "COOKIES_EXPIRED", "message": err_msg}
 
             # 5. Dynamic UI Detection
             split_inputs = page.locator("input.pin-number-input, input[data-uia^='pin-number-']")
@@ -117,47 +140,41 @@ async def run_activation_attempt(email: str, clean_code: str, cookies: list, mob
                 log_activation_detail(mobile, email, clean_code, False, err_msg, steps)
                 return {"success": False, "error_code": "INPUT_NOT_FOUND", "message": err_msg}
 
-            # 6. Optimized Code Entry
+            # 6. Physical Keystroke Entry
             if ui_type == "WHITE_UI_SPLIT":
-                log_step("Focusing first PIN box and typing 8 digits...")
+                log_step("Typing keystroke-by-keystroke into 8 split boxes...")
                 first_box = split_inputs.first
                 await first_box.click()
                 await page.wait_for_timeout(100)
                 
-                # Type digits naturally so auto-advance moves focus smoothly
                 for digit in clean_code:
                     await page.keyboard.press(digit)
                     await page.wait_for_timeout(90)
 
-                # Verification & fallback check for each individual box
+                # Verification & fill fallback
                 entered_chars = []
                 for i in range(8):
                     b = split_inputs.nth(i)
                     val = await b.input_value()
                     entered_chars.append(val)
                     if val != clean_code[i]:
-                        # If focus skipped a box, fill it directly
                         await b.click()
                         await b.fill(clean_code[i])
                 
-                log_step(f"White UI PIN boxes verified: {''.join(entered_chars)}")
+                log_step(f"White UI PIN verified: {''.join(entered_chars)}")
 
             elif ui_type == "BLACK_UI_SINGLE":
-                log_step("Entering code into single input field...")
+                log_step("Typing keystroke-by-keystroke into single React input field...")
                 await single_input.click()
-                await single_input.fill("")
-                await single_input.fill(clean_code)
                 await page.wait_for_timeout(150)
+                await page.keyboard.press("Control+A")
+                await page.keyboard.press("Backspace")
+                await page.wait_for_timeout(100)
                 
-                val = await single_input.input_value()
-                if val != clean_code:
-                    await single_input.click()
-                    await page.keyboard.press("Control+A")
-                    await page.keyboard.press("Backspace")
-                    for digit in clean_code:
-                        await page.keyboard.press(digit)
-                        await page.wait_for_timeout(80)
-                
+                for digit in clean_code:
+                    await page.keyboard.press(digit)
+                    await page.wait_for_timeout(90)
+
                 await single_input.dispatch_event("input")
                 await single_input.dispatch_event("change")
                 log_step(f"Black UI input verified: '{await single_input.input_value()}'")
@@ -183,16 +200,15 @@ async def run_activation_attempt(email: str, clean_code: str, cookies: list, mob
                     clicked = True
                     break
             
-            # Press Enter as backup trigger
             await page.keyboard.press("Enter")
             log_step("Triggered Enter key event.")
 
-            # 8. Strict Verification Polling Loop (15 seconds)
+            # 8. Verification Polling Loop
             log_step("Awaiting verification from Netflix servers...")
-            for second in range(15):
+            for _ in range(15):
                 await page.wait_for_timeout(1000)
                 
-                # Check for Profile Selection Screen (Common on multi-profile accounts)
+                # Check for Profile Selection Screen
                 profile_items = page.locator("[data-uia='action-select-profile'], .profile-link, .profile-icon, [data-uia^='profile-']")
                 if await profile_items.count() > 0 and await profile_items.first.is_visible():
                     log_step("Profile selection screen detected. Selecting primary profile...")
@@ -267,12 +283,18 @@ async def activate_tv(email: str, raw_code: str, mobile: str = "", expiry_date: 
 
     cookies = get_profile_cookies(email)
     if not cookies or len(cookies) == 0:
-        msg = "Cookies expired. Please tell admin to update."
+        msg = "cookies expired please tell admin to update"
         log_activation_detail(mobile, email, clean_code, False, msg, ["No cookies stored for this profile."])
         return {"success": False, "error_code": "COOKIES_EXPIRED", "message": msg, "formatted_output": msg}
 
     try:
         res = await run_activation_attempt(email=email, clean_code=clean_code, cookies=cookies, mobile=mobile)
+        if res.get("error_code") == "COOKIES_EXPIRED":
+            msg = "cookies expired please tell admin to update"
+            res["message"] = msg
+            res["formatted_output"] = msg
+            return res
+
         if res.get("success"):
             user_mobile_str = str(mobile).strip() if mobile else "N/A"
             expiry_str = str(expiry_date).strip() if expiry_date else "Active"
