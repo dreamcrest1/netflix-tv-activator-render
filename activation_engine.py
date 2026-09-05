@@ -135,6 +135,8 @@ async def run_activation_attempt(email: str, clean_code: str, cookies: list, mob
             log_step(f"Detected UI Variant: {ui_type or 'NONE'}")
 
             if not ui_type:
+                page_text = (await page.content())[:200]  # Capture snippet of HTML for debugging
+                log_step(f"Failed to find inputs. HTML snippet: {page_text}")
                 await browser.close()
                 err_msg = "Could not locate code input field on netflix.com/tv2."
                 log_activation_detail(mobile, email, clean_code, False, err_msg, steps)
@@ -158,6 +160,7 @@ async def run_activation_attempt(email: str, clean_code: str, cookies: list, mob
                     val = await b.input_value()
                     entered_chars.append(val)
                     if val != clean_code[i]:
+                        log_step(f"Box {i} was missing digit. Hard-filling it.")
                         await b.click()
                         await b.fill(clean_code[i])
                 
@@ -181,7 +184,7 @@ async def run_activation_attempt(email: str, clean_code: str, cookies: list, mob
 
             await page.wait_for_timeout(600)
 
-            # 7. Form Submission
+            # 7. Form Submission (WITH DOUBLE-SUBMISSION FIX)
             submit_selectors = [
                 "button[data-uia='witcher-code-submit']",
                 "button.tvsignup-continue-button",
@@ -200,13 +203,20 @@ async def run_activation_attempt(email: str, clean_code: str, cookies: list, mob
                     clicked = True
                     break
             
-            await page.keyboard.press("Enter")
-            log_step("Triggered Enter key event.")
+            # Prevent double submission by only pressing Enter if the button click failed
+            if not clicked:
+                log_step("Submit button not found or unclickable. Using fallback Enter key.")
+                await page.keyboard.press("Enter")
 
-            # 8. Verification Polling Loop
+            # 8. Verification Polling Loop with Enhanced State Logging
             log_step("Awaiting verification from Netflix servers...")
-            for _ in range(15):
+            for poll_sec in range(15):
                 await page.wait_for_timeout(1000)
+                
+                # Log current URL strictly to track redirects in the admin panel
+                if page.url != current_url:
+                    log_step(f"[Poll {poll_sec}s] URL shifted to: {page.url}")
+                    current_url = page.url
                 
                 # Check for Profile Selection Screen
                 profile_items = page.locator("[data-uia='action-select-profile'], .profile-link, .profile-icon, [data-uia^='profile-']")
@@ -223,7 +233,7 @@ async def run_activation_attempt(email: str, clean_code: str, cookies: list, mob
 
                 # Check for URL change away from /tv2
                 if "/tv2" not in page.url:
-                    log_step(f"Success! URL redirected to: {page.url}")
+                    log_step(f"Success confirmed via redirect away from TV2.")
                     await browser.close()
                     log_activation_detail(mobile, email, clean_code, True, "Activation successful (URL Redirected)", steps)
                     return {"success": True, "message": "netflix activated"}
@@ -249,13 +259,24 @@ async def run_activation_attempt(email: str, clean_code: str, cookies: list, mob
                         if await el.is_visible():
                             err_text = (await el.inner_text()).strip()
                             if err_text and len(err_text) > 3:
-                                log_step(f"Netflix error displayed: '{err_text}'")
+                                log_step(f"Netflix explicit error banner displayed: '{err_text}'")
                                 await browser.close()
                                 log_activation_detail(mobile, email, clean_code, False, err_text, steps)
                                 return {"success": False, "error_code": "ACTIVATION_FAILED", "message": err_text}
 
-            # 9. Failure Verdict
-            log_step("Verification timed out while still on /tv2. Marking as failed.")
+            # 9. Failure Verdict & Final Snapshot Logging
+            log_step("Verification timed out while still on /tv2.")
+            
+            # Check what is currently visible on the screen to aid debugging
+            is_button_enabled = False
+            for selector in submit_selectors:
+                btn = page.locator(selector).first
+                if await btn.count() > 0:
+                    is_button_enabled = await btn.is_enabled()
+                    break
+            
+            log_step(f"Final state: Continue button enabled? {is_button_enabled}")
+
             await browser.close()
             err_msg = "Invalid or expired TV code. Please check your TV screen."
             log_activation_detail(mobile, email, clean_code, False, err_msg, steps)
